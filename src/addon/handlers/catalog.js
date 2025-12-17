@@ -4,7 +4,7 @@ const hentaimamaScraper = require('../../scrapers/hentaimama');
 const oppaiStreamScraper = require('../../scrapers/oppaistream');
 const hentaiseaScraper = require('../../scrapers/hentaisea');
 const hentaitvScraper = require('../../scrapers/hentaitv');
-const { aggregateCatalogs } = require('../../utils/catalogAggregator');
+const { aggregateCatalogs, isDuplicate, mergeSeries, calculateAverageRating } = require('../../utils/catalogAggregator');
 const ratingNormalizer = require('../../utils/ratingNormalizer');
 const { isWithinWeek, isWithinMonth, compareDatesNewestFirst } = require('../../utils/dateParser');
 const { shouldIncludeSeries, DEFAULT_CONFIG } = require('../../utils/configParser');
@@ -433,17 +433,37 @@ async function catalogHandler(args) {
       break;
     }
     
-    // CRITICAL: Deduplicate across ALL accumulated series!
-    // Pages can return same series, and multiple providers may have same content
-    const existingIds = new Set(catalogData.series.map(s => s.id));
-    const trulyNewSeries = newAggregatedSeries.filter(s => !existingIds.has(s.id));
+    // CRITICAL: Deduplicate across ALL accumulated series using NAME-BASED matching!
+    // Pages can return same series with different IDs from different providers
+    // We need to MERGE duplicates to combine their ratings, not just skip them
+    let mergeCount = 0;
+    const trulyNewSeries = [];
+    
+    for (const newSeries of newAggregatedSeries) {
+      // Find existing series by name similarity (not just ID)
+      const existingIndex = catalogData.series.findIndex(existing => isDuplicate(existing, newSeries));
+      
+      if (existingIndex >= 0) {
+        // Merge with existing series to combine ratings and metadata
+        const merged = mergeSeries(catalogData.series[existingIndex], newSeries);
+        catalogData.series[existingIndex] = merged;
+        mergeCount++;
+        logger.debug(`Merged cross-page duplicate: ${newSeries.name} (rating now: ${merged.rating})`);
+      } else {
+        trulyNewSeries.push(newSeries);
+      }
+    }
     
     const totalFromProviders = providerResults.reduce((sum, pr) => sum + pr.catalog.length, 0);
-    logger.info(`Page ${catalogData.nextPage}: ${totalFromProviders} total items from providers → ${newAggregatedSeries.length} after aggregation → ${trulyNewSeries.length} NEW unique series`);
+    logger.info(`Page ${catalogData.nextPage}: ${totalFromProviders} total items from providers → ${newAggregatedSeries.length} after aggregation → ${trulyNewSeries.length} NEW unique + ${mergeCount} merged with existing`);
     
     // Only add series we don't already have
     if (trulyNewSeries.length > 0) {
       catalogData.series.push(...trulyNewSeries);
+    }
+    
+    // Update cache if anything changed (new series added OR existing merged)
+    if (trulyNewSeries.length > 0 || mergeCount > 0) {
       await cache.set(catalogCacheKey, catalogData, ttl);
     }
     
@@ -515,8 +535,7 @@ async function catalogHandler(args) {
   const safeConfig = {
     blacklistGenres: userConfig?.blacklistGenres || [],
     blacklistStudios: userConfig?.blacklistStudios || [],
-    providers: userConfig?.providers || DEFAULT_CONFIG.providers,
-    englishTitles: userConfig?.englishTitles || false
+    providers: userConfig?.providers || DEFAULT_CONFIG.providers
   };
   
   if (safeConfig.blacklistGenres.length > 0 || safeConfig.blacklistStudios.length > 0) {

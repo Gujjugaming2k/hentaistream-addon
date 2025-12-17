@@ -11,9 +11,7 @@ const DEFAULT_CONFIG = {
   providers: ['hmm', 'hse', 'htv'],
   // No blacklists by default
   blacklistGenres: [],
-  blacklistStudios: [],
-  // English titles preference off by default
-  englishTitles: false
+  blacklistStudios: []
 };
 
 /**
@@ -51,12 +49,6 @@ function parseConfig(query) {
       const value = query.bs || query.blacklist_studios;
       config.blacklistStudios = value.split(',').map(s => s.trim().toLowerCase());
     }
-
-    // English titles
-    if (query.en || query.english_titles) {
-      const value = query.en || query.english_titles;
-      config.englishTitles = value === 'true' || value === '1';
-    }
   } catch (error) {
     console.error('Error parsing config:', error.message);
     return { ...DEFAULT_CONFIG };
@@ -90,11 +82,6 @@ function encodeConfig(config) {
   if (config.blacklistStudios && config.blacklistStudios.length > 0) {
     const studios = config.blacklistStudios.map(s => s.toLowerCase().replace(/\s+/g, '-')).join(',');
     params.set('bs', studios);
-  }
-
-  // English titles preference
-  if (config.englishTitles) {
-    params.set('en', '1');
   }
 
   return params.toString();

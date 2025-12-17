@@ -3,6 +3,24 @@ const cheerio = require('cheerio');
 const logger = require('../utils/logger');
 const { parseDate, extractYear, getMostRecentDate } = require('../utils/dateParser');
 
+// Default headers to avoid 403 errors on cloud hosting (Render, etc.)
+const DEFAULT_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Accept-Encoding': 'gzip, deflate, br',
+  'Cache-Control': 'no-cache',
+  'Pragma': 'no-cache',
+  'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+  'Sec-Ch-Ua-Mobile': '?0',
+  'Sec-Ch-Ua-Platform': '"Windows"',
+  'Sec-Fetch-Dest': 'document',
+  'Sec-Fetch-Mode': 'navigate',
+  'Sec-Fetch-Site': 'none',
+  'Sec-Fetch-User': '?1',
+  'Upgrade-Insecure-Requests': '1'
+};
+
 class HentaiMamaScraper {
   constructor() {
     this.baseUrl = 'https://hentaimama.io';
@@ -11,6 +29,7 @@ class HentaiMamaScraper {
     this.genresCacheTime = null;
     this.name = 'HentaiMama'; // Provider name for rating aggregation
     this.prefix = 'hmm'; // Provider prefix for IDs
+    this.headers = DEFAULT_HEADERS;
   }
 
   /**
@@ -24,7 +43,10 @@ class HentaiMamaScraper {
 
     try {
       logger.info('Fetching HentaiMama genres');
-      const response = await axios.get(`${this.baseUrl}/genres-filter/`);
+      const response = await axios.get(`${this.baseUrl}/genres-filter/`, {
+        headers: this.headers,
+        timeout: 15000
+      });
       const $ = cheerio.load(response.data);
       
       const genres = [];
@@ -87,9 +109,7 @@ class HentaiMamaScraper {
       logger.info(`[HentaiMama] Fetching year ${year} page ${page}: ${url}`);
       
       const response = await axios.get(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        },
+        headers: this.headers,
         timeout: 15000
       });
       const $ = cheerio.load(response.data);
@@ -116,9 +136,7 @@ class HentaiMamaScraper {
       logger.info(`[HentaiMama] Fetching studio ${studio} page ${page}: ${url}`);
       
       const response = await axios.get(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        },
+        headers: this.headers,
         timeout: 15000
       });
       const $ = cheerio.load(response.data);
@@ -357,7 +375,11 @@ class HentaiMamaScraper {
       const fullUrl = params.filter ? `${url}?filter=${params.filter}` : url;
       logger.info(`→ Fetching URL: ${fullUrl}`);
       
-      const response = await axios.get(url, { params });
+      const response = await axios.get(url, { 
+        params,
+        headers: this.headers,
+        timeout: 15000
+      });
 
       const $ = cheerio.load(response.data);
       let episodes = []; // Changed to let for reassignment
@@ -513,9 +535,7 @@ class HentaiMamaScraper {
           const seriesPageUrl = `${this.baseUrl}/tvshows/${slug}/`;
           const seriesResponse = await axios.get(seriesPageUrl, {
             timeout: 2000, // Fail fast on 404s
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
+            headers: this.headers
           });
           
           const $series = cheerio.load(seriesResponse.data);
@@ -671,9 +691,7 @@ class HentaiMamaScraper {
               const epUrl = `${this.baseUrl}/episodes/${firstEp.slug}`;
               const epResponse = await axios.get(epUrl, {
                 timeout: 2000,
-                headers: {
-                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                }
+                headers: this.headers
               });
               
               const $ep = cheerio.load(epResponse.data);
@@ -800,9 +818,7 @@ class HentaiMamaScraper {
         try {
           logger.info(`Fetching series page to find episodes: ${seriesPageUrl}`);
           const seriesResponse = await axios.get(seriesPageUrl, {
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            },
+            headers: this.headers,
             timeout: 5000
           });
           
@@ -834,12 +850,8 @@ class HentaiMamaScraper {
       
       logger.info(`Fetching HentaiMama episode metadata for ${episodeSlug}`);
       response = await axios.get(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.5',
-          'Referer': this.baseUrl
-        }
+        headers: this.headers,
+        timeout: 15000
       });
       $ = cheerio.load(response.data);
       
@@ -855,9 +867,7 @@ class HentaiMamaScraper {
         try {
           logger.info(`Fetching series cover from: ${seriesPageUrl}`);
           const seriesResponse = await axios.get(seriesPageUrl, {
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            },
+            headers: this.headers,
             timeout: 3000
           });
           
@@ -952,7 +962,7 @@ class HentaiMamaScraper {
         try {
           const seriesUrl = seriesPageLink.startsWith('http') ? seriesPageLink : `${this.baseUrl}${seriesPageLink}`;
           const seriesResponse = await axios.get(seriesUrl, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+            headers: this.headers,
             timeout: 3000
           });
           const $seriesPage = cheerio.load(seriesResponse.data);
@@ -1040,9 +1050,7 @@ class HentaiMamaScraper {
         const seriesPageUrl = `${this.baseUrl}/tvshows/${seriesSlug}/`;
         const seriesPageResponse = await axios.get(seriesPageUrl, {
           timeout: 5000,
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-          }
+          headers: this.headers
         });
         
         const $seriesPage = cheerio.load(seriesPageResponse.data);
@@ -1148,7 +1156,10 @@ class HentaiMamaScraper {
       logger.info(`Fetching HentaiMama streams for ${cleanId}`);
       
       // Step 1: Get the episode page
-      const pageResponse = await axios.get(pageUrl);
+      const pageResponse = await axios.get(pageUrl, {
+        headers: this.headers,
+        timeout: 15000
+      });
       const $ = cheerio.load(pageResponse.data);
 
       // Step 2: Find AJAX data (jwplayerOptions or similar)
@@ -1216,7 +1227,10 @@ class HentaiMamaScraper {
                 const iframeUrl = srcMatch[1];
                 try {
                   logger.info(`Fetching iframe: ${iframeUrl}`);
-                  const iframeResponse = await axios.get(iframeUrl);
+                  const iframeResponse = await axios.get(iframeUrl, {
+                    headers: this.headers,
+                    timeout: 10000
+                  });
                   const $iframe = cheerio.load(iframeResponse.data);
                   
                   // Find jwplayer or video sources in iframe

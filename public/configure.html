@@ -528,18 +528,6 @@
       </div>
     </div>
 
-    <!-- Preferences Section -->
-    <div class="card">
-      <h2>Preferences</h2>
-      <div class="toggle-item">
-        <div class="toggle-info">
-          <h3>Prioritise English Titles</h3>
-          <p>When available, show English titles instead of Japanese</p>
-        </div>
-        <div class="toggle-switch" id="englishTitles" onclick="toggleSwitch(this)"></div>
-      </div>
-    </div>
-
     <!-- Install Section -->
     <div class="card install-section">
       <h2>Install Addon</h2>
@@ -580,8 +568,7 @@
     const config = {
       providers: ['hmm', 'hse', 'htv'],
       blacklistGenres: [],
-      blacklistStudios: [],
-      englishTitles: false
+      blacklistStudios: []
     };
 
     // Options data (will be fetched from server)
@@ -609,6 +596,11 @@
       // Setup provider checkboxes
       document.querySelectorAll('#providers .checkbox-item').forEach(item => {
         item.addEventListener('click', () => {
+          // Prevent unchecking if this is the last enabled provider
+          if (item.classList.contains('disabled')) {
+            return;
+          }
+          
           item.classList.toggle('checked');
           const checkbox = item.querySelector('input');
           checkbox.checked = !checkbox.checked;
@@ -650,12 +642,8 @@
           config.blacklistStudios = params.get('bs').split(',');
         }
         
-        // English titles
-        if (params.get('en') === 'true' || params.get('en') === '1') {
-          config.englishTitles = true;
-          document.getElementById('englishTitles').classList.add('active');
-        }
         updateInstallLinks();
+        updateProviderUI();
       } catch (e) {
         console.error('Error parsing config:', e);
       }
@@ -735,19 +723,13 @@
       }
     }
 
-    function toggleSwitch(element) {
-      element.classList.toggle('active');
-      config.englishTitles = element.classList.contains('active');
-      updateInstallLinks();
-    }
-
     function updateProviders() {
       config.providers = [];
       document.querySelectorAll('#providers .checkbox-item.checked').forEach(item => {
         config.providers.push(item.dataset.value);
       });
       
-      // Ensure at least one provider
+      // Ensure at least one provider remains enabled
       if (config.providers.length === 0) {
         config.providers = ['hmm'];
         const firstItem = document.querySelector('#providers .checkbox-item[data-value="hmm"]');
@@ -755,7 +737,31 @@
         firstItem.querySelector('input').checked = true;
       }
       
+      updateProviderUI();
       updateInstallLinks();
+    }
+
+    // Update provider UI to disable the last enabled provider
+    function updateProviderUI() {
+      const allProviderItems = document.querySelectorAll('#providers .checkbox-item');
+      const checkedCount = config.providers.length;
+      
+      allProviderItems.forEach(item => {
+        const isChecked = item.classList.contains('checked');
+        
+        // If only 1 provider is enabled, disable that one so user can't uncheck it
+        if (checkedCount === 1 && isChecked) {
+          item.classList.add('disabled');
+          item.style.opacity = '0.6';
+          item.style.cursor = 'not-allowed';
+          item.title = 'At least one provider must remain enabled';
+        } else {
+          item.classList.remove('disabled');
+          item.style.opacity = '1';
+          item.style.cursor = 'pointer';
+          item.title = '';
+        }
+      });
     }
 
     function buildQueryString() {
@@ -776,11 +782,6 @@
       if (config.blacklistStudios.length > 0) {
         const studios = config.blacklistStudios.map(s => s.toLowerCase().replace(/\s+/g, '-')).join(',');
         params.set('bs', studios);
-      }
-      
-      // English titles
-      if (config.englishTitles) {
-        params.set('en', '1');
       }
       
       return params.toString();

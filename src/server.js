@@ -48,6 +48,52 @@ app.get('/health', (req, res) => {
   res.json(health);
 });
 
+// Self-ping mechanism to keep Render instance alive
+function setupSelfPing() {
+  // Only enable in production (Render)
+  if (config.server.env !== 'production') {
+    logger.info('⏭️  Self-ping disabled (not in production mode)');
+    return;
+  }
+
+  const PING_INTERVAL = 14 * 60 * 1000; // 14 minutes (before 15-min timeout)
+  
+  // Get the app's own URL from Render environment variable
+  const selfUrl = process.env.RENDER_EXTERNAL_URL;
+  
+  if (!selfUrl) {
+    logger.warn('⚠️  RENDER_EXTERNAL_URL not found - self-ping disabled');
+    return;
+  }
+
+  const pingUrl = `${selfUrl}/health`;
+  
+  logger.info(`🔄 Self-ping enabled: ${pingUrl} every ${PING_INTERVAL / 60000} minutes`);
+
+  setInterval(async () => {
+    try {
+      const https = require('https');
+      const http = require('http');
+      const client = pingUrl.startsWith('https') ? https : http;
+      
+      const startTime = Date.now();
+      client.get(pingUrl, (res) => {
+        const duration = Date.now() - startTime;
+        logger.info(`✅ Self-ping successful (${res.statusCode}) - ${duration}ms`);
+      }).on('error', (err) => {
+        logger.error('❌ Self-ping failed:', err.message);
+      });
+    } catch (error) {
+      logger.error('❌ Self-ping error:', error.message);
+    }
+  }, PING_INTERVAL);
+
+  // Do an initial ping after 1 minute
+  setTimeout(() => {
+    logger.info('🔄 Performing initial self-ping...');
+  }, 60000);
+}
+
 // API endpoint for configuration options (full lists)
 app.get('/api/options', (req, res) => {
   res.json({
@@ -593,6 +639,9 @@ const server = app.listen(config.server.port, () => {
   logger.info(`Health Check: http://localhost:${config.server.port}/health`);
   logger.info(`Install URL: stremio://localhost:${config.server.port}/manifest.json`);
   logger.info(`========================================`);
+  
+  // Start self-ping mechanism (Render keep-alive)
+  setupSelfPing();
 });
 
 // Graceful shutdown
