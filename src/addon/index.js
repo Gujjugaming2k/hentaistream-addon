@@ -1,66 +1,81 @@
-const { addonBuilder } = require('stremio-addon-sdk');
-const baseManifest = require('./manifest');
-const { getManifest } = require('./manifest');
+/**
+ * Addon Handlers Export
+ * 
+ * This module exports the handlers directly without using the Stremio addon SDK's
+ * addonBuilder, which has an 8KB manifest size limit. Instead, we serve the manifest
+ * directly via Express (see server.js), bypassing this limit entirely.
+ */
+
 const catalogHandler = require('./handlers/catalog');
 const metaHandler = require('./handlers/meta');
 const streamHandler = require('./handlers/stream');
+const { getManifest } = require('./manifest');
 const logger = require('../utils/logger');
 
-// Create addon builder with base manifest (will be updated dynamically)
-const builder = new addonBuilder(baseManifest);
+// Store cached manifest
+let cachedManifest = null;
 
-// Store dynamic manifest promise
-let manifestPromise = null;
-
-// Get or update manifest with genre catalogs
-async function ensureManifestUpdated() {
-  if (!manifestPromise) {
-    manifestPromise = getManifest().then(manifest => {
-      // Update builder's manifest
-      builder.manifest = manifest;
-      logger.info(`Manifest updated with ${manifest.catalogs.length} catalogs`);
-      return manifest;
-    }).catch(err => {
-      logger.error('Failed to update manifest:', err.message);
-      return baseManifest;
-    });
+/**
+ * Get the manifest (cached after first load)
+ */
+async function ensureManifestLoaded() {
+  if (!cachedManifest) {
+    try {
+      cachedManifest = await getManifest();
+      logger.info(`Manifest loaded with ${cachedManifest.catalogs.length} catalogs`);
+    } catch (err) {
+      logger.error('Failed to load manifest:', err.message);
+      // Return base manifest from require
+      cachedManifest = require('./manifest');
+    }
   }
-  return manifestPromise;
+  return cachedManifest;
 }
 
 // Initialize manifest on startup
-ensureManifestUpdated();
+ensureManifestLoaded();
 
-// Define catalog handler
-builder.defineCatalogHandler(async (args) => {
+/**
+ * Catalog handler wrapper with error handling
+ */
+async function handleCatalog(args) {
   try {
     return await catalogHandler(args);
   } catch (error) {
     logger.error('Catalog handler error:', error);
     return { metas: [] };
   }
-});
+}
 
-// Define meta handler
-builder.defineMetaHandler(async (args) => {
+/**
+ * Meta handler wrapper with error handling
+ */
+async function handleMeta(args) {
   try {
     return await metaHandler(args);
   } catch (error) {
     logger.error('Meta handler error:', error);
     return { meta: null };
   }
-});
+}
 
-// Define stream handler
-builder.defineStreamHandler(async (args) => {
+/**
+ * Stream handler wrapper with error handling
+ */
+async function handleStream(args) {
   try {
     return await streamHandler(args);
   } catch (error) {
     logger.error('Stream handler error:', error);
     return { streams: [] };
   }
-});
+}
 
 logger.info('Addon handlers initialized');
 
-module.exports = builder.getInterface();
+module.exports = {
+  catalogHandler: handleCatalog,
+  metaHandler: handleMeta,
+  streamHandler: handleStream,
+  getManifest: ensureManifestLoaded
+};

@@ -1,7 +1,7 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
 const logger = require('../utils/logger');
-const malClient = require('../utils/mal');
+const { parseDate, extractYear, getMostRecentDate } = require('../utils/dateParser');
 
 class HentaiMamaScraper {
   constructor() {
@@ -9,7 +9,8 @@ class HentaiMamaScraper {
     this.searchUrl = `${this.baseUrl}/episodes`;
     this.genresCache = null;
     this.genresCacheTime = null;
-    this.enableMAL = true; // Feature flag for MAL integration
+    this.name = 'HentaiMama'; // Provider name for rating aggregation
+    this.prefix = 'hmm'; // Provider prefix for IDs
   }
 
   /**
@@ -52,7 +53,10 @@ class HentaiMamaScraper {
       logger.info(`Found ${uniqueGenres.length} genres`);
       return uniqueGenres;
     } catch (error) {
-      logger.error('Error fetching genres:', error.message);
+      const errorMsg = error.response?.status 
+        ? `HTTP ${error.response.status}` 
+        : (error.message || 'Unknown error');
+      logger.warn(`Could not fetch genres: ${errorMsg} (addon will work without genre catalogs)`);
       return [];
     }
   }
@@ -64,6 +68,142 @@ class HentaiMamaScraper {
    */
   async getCatalogByGenre(genre, page = 1) {
     return this.getCatalog(page, genre);
+  }
+
+  /**
+   * Get catalog items filtered by release year
+   * HentaiMama uses advance-search with years_filter query parameter
+   * @param {number|string} year - Year to filter by
+   * @param {number} page - Page number (1-indexed)
+   * @returns {Promise<Array>} Array of series items
+   */
+  async getCatalogByYear(year, page = 1) {
+    try {
+      // HentaiMama uses advance-search with years_filter param
+      // Format: /advance-search/?years_filter[]=YYYY&submit=Submit
+      const url = page === 1 
+        ? `${this.baseUrl}/advance-search/?years_filter%5B%5D=${year}&submit=Submit`
+        : `${this.baseUrl}/advance-search/page/${page}/?years_filter%5B%5D=${year}&submit=Submit`;
+      logger.info(`[HentaiMama] Fetching year ${year} page ${page}: ${url}`);
+      
+      const response = await axios.get(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        },
+        timeout: 15000
+      });
+      const $ = cheerio.load(response.data);
+      
+      // _parseArticleItems will filter to only items with verified matching year
+      return this._parseArticleItems($, year, null);
+    } catch (error) {
+      logger.error(`[HentaiMama] Year catalog error: ${error.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Get catalog items filtered by studio
+   * @param {string} studio - Studio name (will be converted to slug)
+   * @param {number} page - Page number (1-indexed)
+   * @returns {Promise<Array>} Array of series items
+   */
+  async getCatalogByStudio(studio, page = 1) {
+    try {
+      // Convert studio name to URL slug: "Pink Pineapple" -> "pink-pineapple"
+      const studioSlug = studio.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+      const url = `${this.baseUrl}/studio/${studioSlug}/page/${page}/`;
+      logger.info(`[HentaiMama] Fetching studio ${studio} page ${page}: ${url}`);
+      
+      const response = await axios.get(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        },
+        timeout: 15000
+      });
+      const $ = cheerio.load(response.data);
+      
+      return this._parseArticleItems($, null, studio);
+    } catch (error) {
+      logger.error(`[HentaiMama] Studio catalog error: ${error.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Parse article items from catalog page (shared helper)
+   * @param {CheerioAPI} $ - Cheerio instance
+   * @param {string|null} filterYear - Year filter (items without verified year will be excluded)
+   * @param {string|null} filterStudio - Studio filter
+   */
+  _parseArticleItems($, filterYear = null, filterStudio = null) {
+    const items = [];
+    
+    $('article').each((i, el) => {
+      try {
+        const $article = $(el);
+        const $link = $article.find('a').first();
+        const href = $link.attr('href') || '';
+        
+        // Only process series links, not episode links
+        if (!href.includes('/hentai-series/')) return;
+        
+        const slugMatch = href.match(/\/hentai-series\/([^\/]+)/);
+        if (!slugMatch) return;
+        const slug = slugMatch[1];
+        
+        const title = $article.find('.data h3, h3, .title').text().trim() ||
+                     $article.find('img').attr('alt') || '';
+        
+        const poster = $article.find('img').attr('data-src') ||
+                      $article.find('img').attr('src') || '';
+        
+        // Extract year from page content only - DO NOT use filter parameter
+        // We only trust what we can actually extract from the page
+        const yearText = $article.find('.data span, .metadata, .year').text();
+        const yearMatch = yearText.match(/(\d{4})/);
+        const extractedYear = yearMatch ? parseInt(yearMatch[1]) : null;
+        
+        // Studio info is not in catalog listings, only on detail pages
+        const extractedStudio = null;
+        
+        const item = {
+          id: `${this.prefix}-${slug}`,
+          type: 'series',
+          name: title,
+          poster: poster.startsWith('//') ? `https:${poster}` : poster,
+          year: extractedYear,
+          studio: extractedStudio,
+          releaseInfo: extractedYear ? String(extractedYear) : undefined
+        };
+        
+        if (item.name && item.poster) {
+          items.push(item);
+        }
+      } catch (err) {
+        logger.debug(`[HentaiMama] Error parsing article: ${err.message}`);
+      }
+    });
+    
+    logger.info(`[HentaiMama] Found ${items.length} items from year/studio page`);
+    
+    // If filtering by year, only return items where we verified the year
+    if (filterYear) {
+      const yearNum = parseInt(filterYear);
+      const filtered = items.filter(item => item.year === yearNum);
+      logger.info(`[HentaiMama] Year ${filterYear}: ${items.length} total, ${filtered.length} with verified year`);
+      return filtered;
+    }
+    
+    // If filtering by studio, assign the studio from filter (we trust the studio page)
+    if (filterStudio) {
+      items.forEach(item => {
+        item.studio = filterStudio;
+      });
+      logger.info(`[HentaiMama] Studio ${filterStudio}: ${items.length} items`);
+    }
+    
+    return items;
   }
 
   /**
@@ -396,6 +536,58 @@ class HentaiMamaScraper {
             series.poster = seriesCover;
           }
           
+          // Extract proper title with colon from series page
+          const seriesTitle = $series('.sheader h1, .data h1').first().text().trim() ||
+                             $series('meta[property="og:title"]').attr('content') ||
+                             '';
+          if (seriesTitle && seriesTitle.length > 2) {
+            series.name = seriesTitle;
+          }
+          
+          // Extract release year from series page .date element
+          const dateText = $series('.date, span.date').first().text().trim();
+          if (dateText) {
+            const yearMatch = dateText.match(/(19|20)\d{2}/);
+            if (yearMatch) {
+              series.year = yearMatch[0];
+              series.releaseInfo = yearMatch[0]; // Year only for catalog display
+            }
+          }
+          
+          // Extract lastUpdated from article meta for weekly/monthly filtering
+          // Try modified time first (more relevant), then published time
+          const modifiedTime = $series('meta[property="article:modified_time"]').attr('content');
+          const publishedTime = $series('meta[property="article:published_time"]').attr('content');
+          const metaDate = modifiedTime || publishedTime;
+          if (metaDate) {
+            const fullDate = parseDate(metaDate);
+            if (fullDate) {
+              series.lastUpdated = fullDate;
+              logger.debug(`[HentaiMama] Found lastUpdated ${fullDate} for ${series.name}`);
+            }
+          }
+          
+          // Extract rating from series page (DooPlay theme)
+          // Selector: .dt_rating_vgs contains the rating value (e.g., "8.9")
+          const ratingText = $series('.dt_rating_vgs').first().text().trim();
+          if (ratingText) {
+            const ratingValue = parseFloat(ratingText);
+            if (!isNaN(ratingValue) && ratingValue >= 0 && ratingValue <= 10) {
+              series.rating = ratingValue;
+              series.ratingType = 'direct';
+              logger.debug(`[HentaiMama] Found rating ${ratingValue} for ${series.name}`);
+            }
+          }
+          
+          // Extract vote count if available
+          const voteText = $series('.rating-count').first().text().trim();
+          if (voteText) {
+            const voteCount = parseInt(voteText.replace(/[^0-9]/g, ''), 10);
+            if (!isNaN(voteCount)) {
+              series.voteCount = voteCount;
+            }
+          }
+          
           // Extract genres from series page
           const seriesGenres = [];
           $series('.sgeneros a, .genre a, a[rel="tag"]').each((i, tag) => {
@@ -407,6 +599,28 @@ class HentaiMamaScraper {
           
           if (seriesGenres.length > 0) {
             series.genres = seriesGenres;
+          }
+          
+          // Extract studio from series page
+          // Look for links to /studio/ pages in the header/data section
+          let studio = null;
+          $series('.sheader .data a[href*="/studio/"], .sgeneros a[href*="/studio/"], a[href*="/studio/"]').each((i, el) => {
+            const studioText = $series(el).text().trim();
+            if (studioText && studioText.length > 1 && studioText.length < 50) {
+              // Normalize capitalization (prefer Title Case over ALL CAPS)
+              if (studioText === studioText.toUpperCase() && studioText.length > 3) {
+                studio = studioText.split(' ')
+                  .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+                  .join(' ');
+              } else {
+                studio = studioText;
+              }
+              return false; // Take first one only
+            }
+          });
+          
+          if (studio) {
+            series.studio = studio;
           }
           
           // Extract description
@@ -515,31 +729,37 @@ class HentaiMamaScraper {
           series.genres = ['Hentai'];
         }
         
+        // IMPORTANT: If fetched from a genre page, ensure that genre is in the genres array
+        // This is critical for local genre filtering to work correctly
+        if (genre) {
+          // Convert genre slug back to display name (e.g., "3d" -> "3D", "big-boobs" -> "Big Boobs")
+          const genreDisplayName = genre.split('-')
+            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(' ');
+          
+          // Check if this genre (or similar) is already in the array
+          const hasGenre = series.genres.some(g => 
+            g.toLowerCase() === genre.toLowerCase() ||
+            g.toLowerCase().replace(/\s+/g, '-') === genre.toLowerCase() ||
+            g.toLowerCase().includes(genre.toLowerCase()) ||
+            genre.toLowerCase().includes(g.toLowerCase().replace(/\s+/g, '-'))
+          );
+          
+          if (!hasGenre) {
+            series.genres.unshift(genreDisplayName);
+            logger.debug(`[HentaiMama] Added genre "${genreDisplayName}" to ${series.name}`);
+          }
+        }
+        
+        // Ensure releaseInfo is set if year exists
+        if (series.year && !series.releaseInfo) {
+          series.releaseInfo = series.year;
+        }
+        
         return series;
       });
 
       logger.info(`Found ${enrichedSeries.length} series (${enrichedCount} with full metadata)`);
-      
-      // Enrich with MAL data if enabled
-      if (this.enableMAL && enrichedSeries.length > 0) {
-        logger.info(`Enriching ${enrichedSeries.length} series with MAL data...`);
-        
-        // Enrich in batches of 3 to respect rate limits (3 req/sec)
-        const batchSize = 3;
-        const malEnrichedSeries = [];
-        
-        for (let i = 0; i < enrichedSeries.length; i += batchSize) {
-          const batch = enrichedSeries.slice(i, i + batchSize);
-          const batchPromises = batch.map(series => malClient.enrichSeries(series));
-          const batchResults = await Promise.all(batchPromises);
-          malEnrichedSeries.push(...batchResults);
-        }
-        
-        const malMatchCount = malEnrichedSeries.filter(s => s.malId).length;
-        logger.info(`MAL enrichment complete: ${malMatchCount}/${enrichedSeries.length} series matched`);
-        
-        return malEnrichedSeries;
-      }
       
       return enrichedSeries;
 
@@ -722,17 +942,67 @@ class HentaiMamaScraper {
         }
       });
 
-      // Extract release date
-      let releaseInfo = $('.published, .entry-date, time').first().text().trim() ||
-                       $('meta[property="article:published_time"]').attr('content') ||
-                       '';
+      // Extract release date AND proper title from series page (more reliable than episode page)
+      let releaseInfo = '';
+      let seriesTitle = '';
+      let studio = null;
       
-      if (releaseInfo) {
-        // Extract year from date
-        const yearMatch = releaseInfo.match(/20\d{2}/);
-        releaseInfo = yearMatch ? yearMatch[0] : new Date().getFullYear().toString();
-      } else {
-        releaseInfo = new Date().getFullYear().toString();
+      // Try to fetch year, title, and studio from series page if we have the link
+      if (seriesPageLink) {
+        try {
+          const seriesUrl = seriesPageLink.startsWith('http') ? seriesPageLink : `${this.baseUrl}${seriesPageLink}`;
+          const seriesResponse = await axios.get(seriesUrl, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+            timeout: 3000
+          });
+          const $seriesPage = cheerio.load(seriesResponse.data);
+          
+          // Extract proper title with colon from series page
+          seriesTitle = $seriesPage('.sheader h1, .data h1').first().text().trim() ||
+                       $seriesPage('meta[property="og:title"]').attr('content') ||
+                       '';
+          if (seriesTitle && seriesTitle.length > 2) {
+            title = seriesTitle;
+            logger.info(`Found proper title from series page: ${title}`);
+          }
+          
+          // Extract year from .date element on series page
+          const dateText = $seriesPage('.date, span.date').first().text().trim();
+          if (dateText) {
+            const yearMatch = dateText.match(/(19|20)\d{2}/);
+            if (yearMatch) {
+              releaseInfo = yearMatch[0];
+              logger.info(`Found release year from series page: ${releaseInfo}`);
+            }
+          }
+          
+          // Extract studio from series page metadata
+          $seriesPage('.sgeneros a, .data a[href*="studio"]').each((i, el) => {
+            const href = $seriesPage(el).attr('href') || '';
+            if (href.includes('/studio/')) {
+              studio = $seriesPage(el).text().trim();
+            }
+          });
+          if (studio) {
+            logger.info(`Found studio from series page: ${studio}`);
+          }
+        } catch (err) {
+          logger.debug(`Could not fetch series page for year: ${err.message}`);
+        }
+      }
+      
+      // Fallback to episode page meta (less reliable)
+      // Also capture full date for weekly/monthly filtering
+      let episodePublishDate = null;
+      if (!releaseInfo) {
+        const epDateText = $('meta[property="article:published_time"]').attr('content') || '';
+        if (epDateText) {
+          // Parse full date for filtering capabilities
+          episodePublishDate = parseDate(epDateText);
+          // Extract year for display
+          const year = extractYear(epDateText);
+          releaseInfo = year ? year.toString() : '';
+        }
       }
       
       // Select poster: prioritize series cover, fallback to episode images
@@ -836,6 +1106,11 @@ class HentaiMamaScraper {
       
       logger.info(`Found ${episodes.length} episodes for ${seriesSlug}`);
 
+      // Filter out studio from genres (HentaiMama marks studios with same rel="tag" as genres)
+      const filteredGenres = genres.filter(g => 
+        !studio || g.toLowerCase() !== studio.toLowerCase()
+      );
+      
       return {
         id: seriesId,
         seriesId: `hmm-${seriesSlug}`,
@@ -843,16 +1118,22 @@ class HentaiMamaScraper {
         name: title,
         poster: poster || undefined,
         description,
-        genres: genres.length > 0 ? genres : ['Hentai'],
+        genres: filteredGenres.length > 0 ? filteredGenres : ['Hentai'],
+        studio: studio,
         type: 'series',
-        runtime: '25 min',
         releaseInfo,
         episodes: episodes
       };
 
     } catch (error) {
-      logger.error(`Error fetching HentaiMama metadata for ${seriesId}:`, error.message);
-      throw error;
+      const errorMsg = error.response?.status === 404 
+        ? `Series not found (404): ${seriesId}`
+        : `${error.message} (${error.response?.status || 'unknown'})`;
+      
+      logger.error(`Error fetching HentaiMama metadata for ${seriesId}: ${errorMsg}`);
+      
+      // Return null instead of throwing to allow graceful degradation
+      return null;
     }
   }
 

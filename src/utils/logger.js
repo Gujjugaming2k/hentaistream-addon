@@ -16,7 +16,27 @@ const consoleFormat = winston.format.combine(
   winston.format.printf(({ timestamp, level, message, ...meta }) => {
     let msg = `${timestamp} [${level}]: ${message}`;
     if (Object.keys(meta).length > 0) {
-      msg += ` ${JSON.stringify(meta)}`;
+      try {
+        // Safely stringify, avoiding circular references
+        msg += ` ${JSON.stringify(meta, (key, value) => {
+          if (value instanceof Error) {
+            return {
+              message: value.message,
+              stack: value.stack,
+              name: value.name
+            };
+          }
+          // Skip circular references
+          if (typeof value === 'object' && value !== null) {
+            if (value.constructor && ['Socket', 'TLSSocket', 'ClientRequest', 'IncomingMessage', 'HTTPParser'].includes(value.constructor.name)) {
+              return '[Circular]';
+            }
+          }
+          return value;
+        })}`;
+      } catch (err) {
+        msg += ` [Error stringifying metadata: ${err.message}]`;
+      }
     }
     return msg;
   })

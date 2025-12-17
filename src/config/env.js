@@ -4,6 +4,10 @@ module.exports = {
   server: {
     port: parseInt(process.env.PORT) || 7000,
     env: process.env.NODE_ENV || 'development',
+    // Base URL for the addon (required for logo and video proxy to work)
+    // Render provides RENDER_EXTERNAL_URL automatically
+    // Set BASE_URL manually for other platforms
+    baseUrl: process.env.BASE_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${parseInt(process.env.PORT) || 7000}`,
   },
   
   scraper: {
@@ -26,7 +30,7 @@ module.exports = {
     name: process.env.ADDON_NAME || 'HentaiStream',
     id: process.env.ADDON_ID || 'com.hentaistream.addon',
     version: process.env.ADDON_VERSION || '0.1.0',
-    description: process.env.ADDON_DESCRIPTION || 'Adult anime streaming addon. 18+ only.',
+    description: process.env.ADDON_DESCRIPTION || '🔞 18+ ONLY - Premium adult anime streaming\n\n📺 3 Providers: HentaiMama, HentaiTV, HentaiSea\n⭐ Aggregated ratings from all sources\n\n📂 Catalogs: Top Rated, Weekly/Monthly Releases, A-Z, Studios, Release Year\n🏷️ 100+ genre filters\n🎬 200+ animation studios',
   },
   
   logging: {

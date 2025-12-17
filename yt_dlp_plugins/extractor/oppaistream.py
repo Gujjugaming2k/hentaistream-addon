@@ -10,9 +10,8 @@ class OppaiStreamIE(InfoExtractor):
     def _real_extract(self, url):
         video_id = self._match_id(url)
 
-        page = self._download_webpage(Request(url,
-                                              extensions={'allow_redirects': False}),
-                                      video_id, expected_status=(200, 302))
+        # Note: Removed allow_redirects extension for Python 3.14 compatibility
+        page = self._download_webpage(url, video_id, expected_status=(200, 302))
 
         base_url, manifest = self._search_regex(self._MANIFEST_RE, page, 'manifest url', group=(1, 2))
         
