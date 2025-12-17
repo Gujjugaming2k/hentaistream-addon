@@ -3,24 +3,28 @@ const cheerio = require('cheerio');
 const logger = require('../utils/logger');
 const { parseDate, extractYear, getMostRecentDate } = require('../utils/dateParser');
 
-// got-scraping for better TLS fingerprinting (bypasses Cloudflare)
+// impit for better TLS fingerprinting (bypasses Cloudflare)
+// It's the official replacement for got-scraping (which is now EOL)
 // It's ESM-only, so we use dynamic import
-let gotScrapingModule = null;
-let gotScrapingLoaded = false;
+let impitInstance = null;
+let impitLoaded = false;
 
-async function loadGotScraping() {
-  if (gotScrapingLoaded) return gotScrapingModule;
+async function loadImpit() {
+  if (impitLoaded) return impitInstance;
   
   try {
     // Dynamic import for ESM module
-    const module = await import('got-scraping');
-    gotScrapingModule = module.gotScraping;
-    gotScrapingLoaded = true;
-    logger.info('[HentaiMama] got-scraping loaded successfully for Cloudflare bypass');
-    return gotScrapingModule;
+    const { Impit } = await import('impit');
+    impitInstance = new Impit({
+      browser: 'chrome',
+      ignoreTlsErrors: true,
+    });
+    impitLoaded = true;
+    logger.info('[HentaiMama] impit loaded successfully for Cloudflare bypass');
+    return impitInstance;
   } catch (e) {
-    gotScrapingLoaded = true; // Mark as loaded (failed) to not retry
-    logger.warn('[HentaiMama] got-scraping not available, falling back to axios:', e.message);
+    impitLoaded = true; // Mark as loaded (failed) to not retry
+    logger.warn('[HentaiMama] impit not available, falling back to axios:', e.message);
     return null;
   }
 }
@@ -70,52 +74,47 @@ class HentaiMamaScraper {
 
   /**
    * Make a resilient HTTP request with retry logic and TLS fingerprint rotation
-   * Uses got-scraping for better Cloudflare bypass, falls back to axios
+   * Uses impit for better Cloudflare bypass, falls back to axios
    * @param {string} url - URL to fetch
-   * @param {object} options - Additional options
+   * @param {object} options - Additional options (not used with impit)
    * @returns {Promise<object>} Response with { data, status }
    */
   async makeRequest(url, options = {}) {
     let lastError;
     
-    // Try to load got-scraping (ESM module, loaded dynamically)
-    const gotScraping = await loadGotScraping();
+    // Try to load impit (ESM module, loaded dynamically)
+    const impit = await loadImpit();
     
     for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
       try {
-        // Try got-scraping first (better TLS fingerprinting for Cloudflare bypass)
-        if (gotScraping) {
-          const response = await gotScraping({
-            url,
-            headerGeneratorOptions: {
-              browsers: ['chrome', 'firefox', 'safari'],
-              devices: ['desktop'],
-              locales: ['en-US'],
-              operatingSystems: ['windows', 'macos', 'linux'],
-            },
-            timeout: { request: 15000 },
-            retry: { limit: 0 }, // We handle retries ourselves
-            ...options
+        // Try impit first (proper TLS fingerprinting for Cloudflare bypass)
+        if (impit) {
+          const response = await impit.fetch(url, {
+            headers: buildHeaders(),
           });
           
-          return { data: response.body, status: response.statusCode };
+          if (!response.ok && response.status === 403) {
+            throw { status: 403, message: 'Forbidden' };
+          }
+          
+          const body = await response.text();
+          return { data: body, status: response.status };
         }
         
-        // Fallback to axios if got-scraping not available
+        // Fallback to axios if impit not available
         const headers = buildHeaders();
         const response = await axios.get(url, {
           headers,
           timeout: 15000,
-          ...options
         });
         return response;
       } catch (error) {
         lastError = error;
-        const status = error.response?.statusCode || error.response?.status || error.code || 'network error';
+        const status = error.status || error.response?.status || error.code || 'network error';
         
-        if ((status === 403 || status === 'ERR_NON_2XX_3XX_RESPONSE') && attempt < this.maxRetries) {
-          // 403 or non-2xx - try again with different fingerprint
-          logger.warn(`[HentaiMama] Attempt ${attempt} failed (${status}), retrying with different browser fingerprint...`);
+        if (status === 403 && attempt < this.maxRetries) {
+          // 403 - try again
+          logger.warn(`[HentaiMama] Attempt ${attempt} failed (${status}), retrying...`);
           await new Promise(resolve => setTimeout(resolve, 1000 * attempt)); // Backoff
           continue;
         }
