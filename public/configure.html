@@ -465,21 +465,18 @@
       <div class="form-group">
         <label>Select which providers to use:</label>
         <div class="checkbox-group" id="providers">
-          <label class="checkbox-item checked" data-value="hmm">
-            <input type="checkbox" checked>
+          <div class="checkbox-item checked" data-value="hmm">
             <span class="checkmark"></span>
             <span>HentaiMama</span>
-          </label>
-          <label class="checkbox-item checked" data-value="hse">
-            <input type="checkbox" checked>
+          </div>
+          <div class="checkbox-item checked" data-value="hse">
             <span class="checkmark"></span>
             <span>HentaiSea</span>
-          </label>
-          <label class="checkbox-item checked" data-value="htv">
-            <input type="checkbox" checked>
+          </div>
+          <div class="checkbox-item checked" data-value="htv">
             <span class="checkmark"></span>
             <span>HentaiTV</span>
-          </label>
+          </div>
         </div>
         <p class="hint">Disabling providers will exclude their content from results</p>
       </div>
@@ -595,15 +592,16 @@
 
       // Setup provider checkboxes
       document.querySelectorAll('#providers .checkbox-item').forEach(item => {
-        item.addEventListener('click', () => {
+        item.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          
           // Prevent unchecking if this is the last enabled provider
           if (item.classList.contains('disabled')) {
             return;
           }
           
           item.classList.toggle('checked');
-          const checkbox = item.querySelector('input');
-          checkbox.checked = !checkbox.checked;
           updateProviders();
         });
       });
@@ -628,7 +626,6 @@
           document.querySelectorAll('#providers .checkbox-item').forEach(item => {
             const isChecked = config.providers.includes(item.dataset.value);
             item.classList.toggle('checked', isChecked);
-            item.querySelector('input').checked = isChecked;
           });
         }
         
@@ -733,8 +730,7 @@
       if (config.providers.length === 0) {
         config.providers = ['hmm'];
         const firstItem = document.querySelector('#providers .checkbox-item[data-value="hmm"]');
-        firstItem.classList.add('checked');
-        firstItem.querySelector('input').checked = true;
+        if (firstItem) firstItem.classList.add('checked');
       }
       
       updateProviderUI();

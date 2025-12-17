@@ -10,7 +10,8 @@ const logger = require('./logger');
 // Configuration
 const CONFIG = {
   // Minimum view threshold before view-based ratings have full weight
-  VIEW_THRESHOLD: 1000,
+  // Lowered to 100 to include more content with ratings
+  VIEW_THRESHOLD: 100,
   
   // Default rating for content without ratings (neutral)
   DEFAULT_RATING: 6.0,

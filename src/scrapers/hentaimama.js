@@ -3,23 +3,37 @@ const cheerio = require('cheerio');
 const logger = require('../utils/logger');
 const { parseDate, extractYear, getMostRecentDate } = require('../utils/dateParser');
 
-// Default headers to avoid 403 errors on cloud hosting (Render, etc.)
-const DEFAULT_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-  'Accept-Language': 'en-US,en;q=0.9',
-  'Accept-Encoding': 'gzip, deflate, br',
-  'Cache-Control': 'no-cache',
-  'Pragma': 'no-cache',
-  'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-  'Sec-Ch-Ua-Mobile': '?0',
-  'Sec-Ch-Ua-Platform': '"Windows"',
-  'Sec-Fetch-Dest': 'document',
-  'Sec-Fetch-Mode': 'navigate',
-  'Sec-Fetch-Site': 'none',
-  'Sec-Fetch-User': '?1',
-  'Upgrade-Insecure-Requests': '1'
-};
+// Multiple User-Agents to rotate through (some sites block specific ones)
+const USER_AGENTS = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+];
+
+// Get a random User-Agent
+function getRandomUserAgent() {
+  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+}
+
+// Build headers with optional custom User-Agent
+function buildHeaders(customUA = null) {
+  return {
+    'User-Agent': customUA || getRandomUserAgent(),
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Cache-Control': 'no-cache',
+    'Pragma': 'no-cache',
+    'Connection': 'keep-alive',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-User': '?1',
+    'Upgrade-Insecure-Requests': '1'
+  };
+}
 
 class HentaiMamaScraper {
   constructor() {
@@ -29,7 +43,44 @@ class HentaiMamaScraper {
     this.genresCacheTime = null;
     this.name = 'HentaiMama'; // Provider name for rating aggregation
     this.prefix = 'hmm'; // Provider prefix for IDs
-    this.headers = DEFAULT_HEADERS;
+    this.maxRetries = 3; // Number of retries with different User-Agents
+  }
+
+  /**
+   * Make a resilient HTTP request with retry logic and User-Agent rotation
+   * @param {string} url - URL to fetch
+   * @param {object} options - Additional axios options
+   * @returns {Promise<object>} Axios response
+   */
+  async makeRequest(url, options = {}) {
+    let lastError;
+    
+    for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
+      try {
+        const headers = buildHeaders();
+        const response = await axios.get(url, {
+          headers,
+          timeout: 15000,
+          ...options
+        });
+        return response;
+      } catch (error) {
+        lastError = error;
+        const status = error.response?.status || 'network error';
+        
+        if (status === 403 && attempt < this.maxRetries) {
+          // 403 might be User-Agent based, try with different one
+          logger.warn(`[HentaiMama] Attempt ${attempt} failed (${status}), retrying with different User-Agent...`);
+          await new Promise(resolve => setTimeout(resolve, 500 * attempt)); // Backoff
+          continue;
+        }
+        
+        // Other errors or final attempt
+        throw error;
+      }
+    }
+    
+    throw lastError;
   }
 
   /**
@@ -43,10 +94,7 @@ class HentaiMamaScraper {
 
     try {
       logger.info('Fetching HentaiMama genres');
-      const response = await axios.get(`${this.baseUrl}/genres-filter/`, {
-        headers: this.headers,
-        timeout: 15000
-      });
+      const response = await this.makeRequest(`${this.baseUrl}/genres-filter/`);
       const $ = cheerio.load(response.data);
       
       const genres = [];
@@ -108,10 +156,7 @@ class HentaiMamaScraper {
         : `${this.baseUrl}/advance-search/page/${page}/?years_filter%5B%5D=${year}&submit=Submit`;
       logger.info(`[HentaiMama] Fetching year ${year} page ${page}: ${url}`);
       
-      const response = await axios.get(url, {
-        headers: this.headers,
-        timeout: 15000
-      });
+      const response = await this.makeRequest(url);
       const $ = cheerio.load(response.data);
       
       // _parseArticleItems will filter to only items with verified matching year
@@ -135,10 +180,7 @@ class HentaiMamaScraper {
       const url = `${this.baseUrl}/studio/${studioSlug}/page/${page}/`;
       logger.info(`[HentaiMama] Fetching studio ${studio} page ${page}: ${url}`);
       
-      const response = await axios.get(url, {
-        headers: this.headers,
-        timeout: 15000
-      });
+      const response = await this.makeRequest(url);
       const $ = cheerio.load(response.data);
       
       return this._parseArticleItems($, null, studio);
@@ -375,11 +417,7 @@ class HentaiMamaScraper {
       const fullUrl = params.filter ? `${url}?filter=${params.filter}` : url;
       logger.info(`→ Fetching URL: ${fullUrl}`);
       
-      const response = await axios.get(url, { 
-        params,
-        headers: this.headers,
-        timeout: 15000
-      });
+      const response = await this.makeRequest(url, { params });
 
       const $ = cheerio.load(response.data);
       let episodes = []; // Changed to let for reassignment
@@ -533,10 +571,7 @@ class HentaiMamaScraper {
         const batchPromises = batch.map(async ([slug, series]) => {
         try {
           const seriesPageUrl = `${this.baseUrl}/tvshows/${slug}/`;
-          const seriesResponse = await axios.get(seriesPageUrl, {
-            timeout: 2000, // Fail fast on 404s
-            headers: this.headers
-          });
+          const seriesResponse = await this.makeRequest(seriesPageUrl, { timeout: 2000 });
           
           const $series = cheerio.load(seriesResponse.data);
           
@@ -689,10 +724,7 @@ class HentaiMamaScraper {
             const firstEp = series.episodes[0];
             if (firstEp && firstEp.slug) {
               const epUrl = `${this.baseUrl}/episodes/${firstEp.slug}`;
-              const epResponse = await axios.get(epUrl, {
-                timeout: 2000,
-                headers: this.headers
-              });
+              const epResponse = await this.makeRequest(epUrl, { timeout: 2000 });
               
               const $ep = cheerio.load(epResponse.data);
               
@@ -817,10 +849,7 @@ class HentaiMamaScraper {
       if (!episodeSlug) {
         try {
           logger.info(`Fetching series page to find episodes: ${seriesPageUrl}`);
-          const seriesResponse = await axios.get(seriesPageUrl, {
-            headers: this.headers,
-            timeout: 5000
-          });
+          const seriesResponse = await this.makeRequest(seriesPageUrl, { timeout: 5000 });
           
           const $series = cheerio.load(seriesResponse.data);
           
@@ -849,10 +878,7 @@ class HentaiMamaScraper {
       const url = `${this.baseUrl}/episodes/${episodeSlug}`;
       
       logger.info(`Fetching HentaiMama episode metadata for ${episodeSlug}`);
-      response = await axios.get(url, {
-        headers: this.headers,
-        timeout: 15000
-      });
+      response = await this.makeRequest(url);
       $ = cheerio.load(response.data);
       
       // Extract the actual series page URL from the episode page (if we don't have it yet)
@@ -866,10 +892,7 @@ class HentaiMamaScraper {
         
         try {
           logger.info(`Fetching series cover from: ${seriesPageUrl}`);
-          const seriesResponse = await axios.get(seriesPageUrl, {
-            headers: this.headers,
-            timeout: 3000
-          });
+          const seriesResponse = await this.makeRequest(seriesPageUrl, { timeout: 3000 });
           
           const $series = cheerio.load(seriesResponse.data);
           
@@ -961,10 +984,7 @@ class HentaiMamaScraper {
       if (seriesPageLink) {
         try {
           const seriesUrl = seriesPageLink.startsWith('http') ? seriesPageLink : `${this.baseUrl}${seriesPageLink}`;
-          const seriesResponse = await axios.get(seriesUrl, {
-            headers: this.headers,
-            timeout: 3000
-          });
+          const seriesResponse = await this.makeRequest(seriesUrl, { timeout: 3000 });
           const $seriesPage = cheerio.load(seriesResponse.data);
           
           // Extract proper title with colon from series page
@@ -1048,10 +1068,7 @@ class HentaiMamaScraper {
       // Try to fetch episodes from the series page first
       try {
         const seriesPageUrl = `${this.baseUrl}/tvshows/${seriesSlug}/`;
-        const seriesPageResponse = await axios.get(seriesPageUrl, {
-          timeout: 5000,
-          headers: this.headers
-        });
+        const seriesPageResponse = await this.makeRequest(seriesPageUrl, { timeout: 5000 });
         
         const $seriesPage = cheerio.load(seriesPageResponse.data);
         
@@ -1156,10 +1173,7 @@ class HentaiMamaScraper {
       logger.info(`Fetching HentaiMama streams for ${cleanId}`);
       
       // Step 1: Get the episode page
-      const pageResponse = await axios.get(pageUrl, {
-        headers: this.headers,
-        timeout: 15000
-      });
+      const pageResponse = await this.makeRequest(pageUrl);
       const $ = cheerio.load(pageResponse.data);
 
       // Step 2: Find AJAX data (jwplayerOptions or similar)
@@ -1227,10 +1241,7 @@ class HentaiMamaScraper {
                 const iframeUrl = srcMatch[1];
                 try {
                   logger.info(`Fetching iframe: ${iframeUrl}`);
-                  const iframeResponse = await axios.get(iframeUrl, {
-                    headers: this.headers,
-                    timeout: 10000
-                  });
+                  const iframeResponse = await this.makeRequest(iframeUrl, { timeout: 10000 });
                   const $iframe = cheerio.load(iframeResponse.data);
                   
                   // Find jwplayer or video sources in iframe
