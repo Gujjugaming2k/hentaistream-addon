@@ -3,31 +3,9 @@ const cheerio = require('cheerio');
 const logger = require('../utils/logger');
 const { parseDate, extractYear, getMostRecentDate } = require('../utils/dateParser');
 
-// impit for better TLS fingerprinting (bypasses Cloudflare)
-// It's the official replacement for got-scraping (which is now EOL)
-// It's ESM-only, so we use dynamic import
-let impitInstance = null;
-let impitLoaded = false;
-
-async function loadImpit() {
-  if (impitLoaded) return impitInstance;
-  
-  try {
-    // Dynamic import for ESM module
-    const { Impit } = await import('impit');
-    impitInstance = new Impit({
-      browser: 'chrome',
-      ignoreTlsErrors: true,
-    });
-    impitLoaded = true;
-    logger.info('[HentaiMama] impit loaded successfully for Cloudflare bypass');
-    return impitInstance;
-  } catch (e) {
-    impitLoaded = true; // Mark as loaded (failed) to not retry
-    logger.warn('[HentaiMama] impit not available, falling back to axios:', e.message);
-    return null;
-  }
-}
+// Cloudflare Worker proxy URL (set via environment variable)
+// Deploy the worker from cloudflare-worker/worker.js to get this URL
+const CF_PROXY_URL = process.env.CF_PROXY_URL || null;
 
 // Multiple User-Agents to rotate through (some sites block specific ones)
 const USER_AGENTS = [
@@ -69,39 +47,48 @@ class HentaiMamaScraper {
     this.genresCacheTime = null;
     this.name = 'HentaiMama'; // Provider name for rating aggregation
     this.prefix = 'hmm'; // Provider prefix for IDs
-    this.maxRetries = 3; // Number of retries with different User-Agents
+    this.maxRetries = 3; // Number of retries
+    
+    // Log proxy status on construction
+    if (CF_PROXY_URL) {
+      logger.info(`[HentaiMama] Cloudflare Worker proxy enabled: ${CF_PROXY_URL}`);
+    } else {
+      logger.info('[HentaiMama] No CF_PROXY_URL set, using direct requests (may get blocked on cloud hosting)');
+    }
   }
 
   /**
-   * Make a resilient HTTP request with retry logic and TLS fingerprint rotation
-   * Uses impit for better Cloudflare bypass, falls back to axios
+   * Make a resilient HTTP request using Cloudflare Worker proxy (if available)
+   * Falls back to direct axios requests
    * @param {string} url - URL to fetch
-   * @param {object} options - Additional options (not used with impit)
+   * @param {object} options - Additional options
    * @returns {Promise<object>} Response with { data, status }
    */
   async makeRequest(url, options = {}) {
     let lastError;
     
-    // Try to load impit (ESM module, loaded dynamically)
-    const impit = await loadImpit();
-    
     for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
       try {
-        // Try impit first (proper TLS fingerprinting for Cloudflare bypass)
-        if (impit) {
-          const response = await impit.fetch(url, {
-            headers: buildHeaders(),
+        // Use Cloudflare Worker proxy if available (best for cloud hosting)
+        if (CF_PROXY_URL) {
+          const proxyUrl = `${CF_PROXY_URL}?url=${encodeURIComponent(url)}`;
+          const response = await axios.get(proxyUrl, {
+            timeout: 30000, // Longer timeout for proxy
+            headers: {
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            },
           });
           
-          if (!response.ok && response.status === 403) {
-            throw { status: 403, message: 'Forbidden' };
+          // Check if the proxied request returned 403
+          const proxiedStatus = response.headers['x-proxied-status'];
+          if (proxiedStatus === '403') {
+            throw { status: 403, message: 'Forbidden (via proxy)' };
           }
           
-          const body = await response.text();
-          return { data: body, status: response.status };
+          return { data: response.data, status: response.status };
         }
         
-        // Fallback to axios if impit not available
+        // Direct request (works locally, may fail on cloud hosting)
         const headers = buildHeaders();
         const response = await axios.get(url, {
           headers,
@@ -113,13 +100,11 @@ class HentaiMamaScraper {
         const status = error.status || error.response?.status || error.code || 'network error';
         
         if (status === 403 && attempt < this.maxRetries) {
-          // 403 - try again
           logger.warn(`[HentaiMama] Attempt ${attempt} failed (${status}), retrying...`);
-          await new Promise(resolve => setTimeout(resolve, 1000 * attempt)); // Backoff
+          await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
           continue;
         }
         
-        // Other errors or final attempt
         throw error;
       }
     }
