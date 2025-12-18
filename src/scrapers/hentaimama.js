@@ -438,15 +438,17 @@ class HentaiMamaScraper {
       
       // HentaiMama uses WordPress-style pagination: /page/2/, /page/3/, etc.
       // Page 1 has no /page/1/ suffix
-      const url = page === 1 ? `${baseUrl}/` : `${baseUrl}/page/${page}/`;
+      let url = page === 1 ? `${baseUrl}/` : `${baseUrl}/page/${page}/`;
       
-      // Add filter parameter for popular sort
-      const params = sortBy === 'popular' ? { filter: 'rating' } : {};
+      // Add filter parameter for popular sort - MUST be in the URL itself
+      // because makeRequest uses the URL directly
+      if (sortBy === 'popular') {
+        url += url.includes('?') ? '&filter=rating' : '?filter=rating';
+      }
       
-      const fullUrl = params.filter ? `${url}?filter=${params.filter}` : url;
-      logger.info(`→ Fetching URL: ${fullUrl}`);
+      logger.info(`→ Fetching URL: ${url}`);
       
-      const response = await this.makeRequest(url, { params });
+      const response = await this.makeRequest(url);
 
       const $ = cheerio.load(response.data);
       let episodes = []; // Changed to let for reassignment

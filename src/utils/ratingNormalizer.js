@@ -16,11 +16,11 @@ const CONFIG = {
   // Default rating for content without ratings (neutral)
   DEFAULT_RATING: 6.0,
   
-  // Provider weights (HentaiMama ratings are more reliable)
+  // Provider weights (HentaiMama ratings are most reliable)
   PROVIDER_WEIGHTS: {
     hmm: 3.0,  // HentaiMama - direct user ratings, highest weight
     htv: 1.5,  // HentaiTV - view counts, medium weight
-    hse: 0.5,  // HentaiSea - no ratings available, lowest weight
+    hse: 1.5,  // HentaiSea - trending position (when available), medium weight
   },
   
   // View count to rating conversion (logarithmic scale)
@@ -75,7 +75,7 @@ function normalizeViewCount(views) {
 /**
  * Normalize a rating based on its type
  * @param {number} value - Raw rating/view value
- * @param {string} type - Type of rating: 'direct', 'views', 'percentage', 'stars'
+ * @param {string} type - Type of rating: 'direct', 'views', 'percentage', 'stars', 'trending'
  * @returns {number|null} Normalized rating (0-10) or null if invalid
  */
 function normalizeRating(value, type = 'direct') {
@@ -85,6 +85,11 @@ function normalizeRating(value, type = 'direct') {
     
     case 'views':
       return normalizeViewCount(value);
+    
+    case 'trending':
+      // Trending position is already converted to a 0-10 rating in the scraper
+      // Just validate and pass through
+      return normalizeDirectRating(value);
     
     case 'percentage':
       // 0-100% to 0-10

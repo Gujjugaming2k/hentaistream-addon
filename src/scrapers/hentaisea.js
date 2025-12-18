@@ -161,14 +161,170 @@ class HentaiSeaScraper extends BaseScraper {
   }
 
   /**
-   * Get catalog items from latest-series page
+   * Get trending/popular items with position-based ratings
+   * Uses /trending/ page which is sorted by popularity
+   * Position in list determines rating: #1 = 9.5, #30 = ~7.0
+   * Fetches metadata from individual series pages for genres, year, description
+   * @param {number} page - Page number (1-indexed)
+   * @returns {Promise<Array>} Array of series items with ratings and full metadata
+   */
+  async getTrending(page = 1) {
+    try {
+      const url = `${this.baseUrl}/trending/page/${page}/`;
+      logger.info(`[HentaiSea] Fetching trending page ${page}: ${url}`);
+      
+      const response = await this.client.get(url);
+      const $ = cheerio.load(response.data);
+      
+      const items = [];
+      const itemsPerPage = 30; // Typical items per page
+      const basePosition = (page - 1) * itemsPerPage;
+      
+      // Parse article.item.tvshows elements - get basic info first
+      $('article.item.tvshows').each((i, el) => {
+        try {
+          const $item = $(el);
+          
+          // Get poster image
+          const posterImg = $item.find('.poster img');
+          const poster = posterImg.attr('data-lazy-src') || posterImg.attr('src') || '';
+          
+          // Get title
+          const titleEl = $item.find('.data h3 a');
+          const title = titleEl.text().trim();
+          const href = titleEl.attr('href') || '';
+          
+          // Extract slug from URL
+          const slugMatch = href.match(/\/watch\/([^\/]+)/);
+          if (!slugMatch) return;
+          const slug = slugMatch[1];
+          
+          // Try to get embedded metadata (may not exist on trending page)
+          const description = $item.find('.texto').text().trim() || '';
+          const genres = [];
+          $item.find('.mta a[rel="tag"]').each((j, tagEl) => {
+            const genre = $(tagEl).text().trim();
+            if (genre) genres.push(genre);
+          });
+          const yearMatch = $item.find('.data span').text().match(/(\d{4})/);
+          const year = yearMatch ? parseInt(yearMatch[1]) : null;
+          
+          // Calculate rating based on position in trending list
+          const position = basePosition + i + 1;
+          const rating = Math.max(5.0, Math.round((9.5 - (position * 0.05)) * 10) / 10);
+          
+          const item = {
+            id: `${this.prefix}${slug}`,
+            type: 'series',
+            name: title,
+            poster: poster,
+            slug: slug, // Keep slug for metadata fetch
+            description: description,
+            genres: genres,
+            year: year,
+            releaseInfo: year ? String(year) : undefined,
+            rating: rating,
+            ratingType: 'trending',
+            trendingPosition: position
+          };
+          
+          if (item.name && item.poster) {
+            items.push(item);
+          }
+        } catch (err) {
+          logger.debug(`[HentaiSea] Error parsing trending item: ${err.message}`);
+        }
+      });
+      
+      logger.info(`[HentaiSea] Found ${items.length} trending items, fetching metadata...`);
+      
+      // Fetch metadata from individual series pages in batches
+      // This gets genres, year, description, studio that aren't on trending page
+      // Uses same selectors as getMetadata() for consistency
+      const batchSize = 5;
+      for (let i = 0; i < items.length; i += batchSize) {
+        const batch = items.slice(i, i + batchSize);
+        await Promise.all(batch.map(async (item) => {
+          try {
+            const metaUrl = `${this.baseUrl}/watch/${item.slug}/`;
+            const metaResponse = await this.client.get(metaUrl, { timeout: 8000 });
+            const $meta = cheerio.load(metaResponse.data);
+            
+            // Get genres from series page using rel="tag" links (same as getMetadata)
+            if (!item.genres || item.genres.length === 0) {
+              const genres = [];
+              $meta('a[rel="tag"]').each((j, tagEl) => {
+                const genre = $meta(tagEl).text().trim();
+                if (genre && !genres.includes(genre)) genres.push(genre);
+              });
+              if (genres.length > 0) item.genres = genres;
+            }
+            
+            // Get year from series page (same selector as getMetadata)
+            if (!item.year) {
+              const yearText = $meta('.sheader .data .extra span.date, .date, time').first().text();
+              const yearMatch = yearText.match(/(\d{4})/);
+              if (yearMatch) {
+                item.year = parseInt(yearMatch[1]);
+                item.releaseInfo = String(item.year);
+              }
+            }
+            
+            // Get description from series page
+            if (!item.description) {
+              let desc = '';
+              $meta('.wp-content p').each((j, el) => {
+                const text = $meta(el).text().trim();
+                if (text && !text.startsWith('Watch ') && text.length > 50) {
+                  desc = text;
+                  return false; // Break
+                }
+              });
+              if (desc) item.description = desc.substring(0, 500);
+            }
+            
+            // Get studio (same selector as getMetadata)
+            $meta('.sheader .data a[href*="/studio/"], a[href*="/studio/"]').each((j, el) => {
+              const studioText = $meta(el).text().trim();
+              if (studioText && studioText.length > 1 && studioText.length < 50) {
+                item.studio = studioText;
+                return false; // Take first one only
+              }
+            });
+            
+            // Clean up temporary slug property
+            delete item.slug;
+            
+          } catch (metaErr) {
+            logger.debug(`[HentaiSea] Metadata fetch error for ${item.name}: ${metaErr.message}`);
+            delete item.slug;
+          }
+        }));
+      }
+      
+      logger.info(`[HentaiSea] Trending complete: ${items.length} items with metadata (page ${page})`);
+      return items;
+      
+    } catch (error) {
+      logger.error(`[HentaiSea] Trending error: ${error.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Get catalog items from latest-series page or trending page
    * @param {number} page - Page number (1-indexed)
    * @param {string} genre - Optional genre filter
-   * @param {string} sortBy - Sort order (unused for now)
+   * @param {string} sortBy - Sort order: 'popular' uses /trending/, 'recent' uses /latest-series/
    * @returns {Promise<Array>} Array of series items
    */
   async getCatalog(page = 1, genre = null, sortBy = 'popular') {
     try {
+      // For popular sort without genre filter, use trending page
+      if (sortBy === 'popular' && !genre) {
+        return this.getTrending(page);
+      }
+      
       let url;
       if (genre) {
         url = `${this.baseUrl}/genre/${genre}/page/${page}/`;

@@ -266,13 +266,188 @@ class HentaiTVScraper {
   }
 
   /**
+   * Fetch catalog from search page - includes view counts for each episode
+   * This is used for "popular" sorting since view counts indicate popularity
+   * @param {number} page - Page number (1-indexed)
+   * @returns {Promise<Array>} Array of series items with view counts
+   */
+  async getCatalogFromSearchPage(page = 1) {
+    try {
+      const url = page === 1 
+        ? `${this.baseUrl}/?s=` 
+        : `${this.baseUrl}/page/${page}/?s=`;
+      
+      logger.info(`[HentaiTV] Fetching catalog from search page ${page}: ${url}`);
+      
+      const response = await this.client.get(url, {
+        timeout: 15000,
+        headers: {
+          ...this.client.defaults.headers,
+          'Cookie': 'inter=1' // Bypass interstitial page
+        },
+        validateStatus: status => status < 400
+      });
+      
+      const $ = cheerio.load(response.data);
+      
+      // Parse episodes with view counts from the search results
+      // HentaiTV uses figure elements for posters, with links in parent containers
+      const episodeMap = new Map();
+      
+      // First, build a map of poster URLs by finding figure elements with images
+      // Each figure is inside a card container (crsl-slde class) with exactly one link
+      const posterMap = new Map(); // episodeSlug -> posterUrl
+      $('figure').each((i, el) => {
+        const $figure = $(el);
+        const $img = $figure.find('img[src*="wp-content/uploads"]');
+        if (!$img.length) return;
+        
+        const posterUrl = $img.attr('src') || '';
+        
+        // Card container is 2 levels up from figure
+        const $cardContainer = $figure.parent().parent();
+        
+        // Get the first link to /hentai/ in this card
+        const $link = $cardContainer.find('a[href*="/hentai/"]').first();
+        if ($link.length) {
+          const href = $link.attr('href') || '';
+          const slugMatch = href.match(/\/hentai\/([^\/]+)/);
+          if (slugMatch) {
+            posterMap.set(slugMatch[1], posterUrl);
+          }
+        }
+      });
+      
+      // Now parse all episode links
+      $('a[href*="/hentai/"]').each((i, el) => {
+        const $link = $(el);
+        const href = $link.attr('href') || '';
+        
+        // Only process episode links
+        if (!href.includes('/hentai/')) return;
+        
+        const title = $link.text().trim();
+        if (!title || title.length < 5) return;
+        
+        // Get slug from href
+        const slugMatch = href.match(/\/hentai\/([^\/]+)/);
+        if (!slugMatch) return;
+        const episodeSlug = slugMatch[1];
+        
+        // Parse series name and episode number from title
+        // Handle both "Episode" and "Episodio" (Spanish titles)
+        const episodeMatch = title.match(/^(.+?)\s+Episod[eo]\s+(\d+)$/i);
+        if (!episodeMatch) return;
+        
+        const seriesName = episodeMatch[1].trim();
+        const episodeNum = parseInt(episodeMatch[2]);
+        
+        // Look for view count in nearby elements
+        let views = null;
+        const $container = $link.closest('div').parent();
+        $container.find('*').each((j, child) => {
+          const text = $(child).text().trim();
+          if (/^[\d,]+$/.test(text) && text.length >= 4) {
+            const num = parseInt(text.replace(/,/g, ''));
+            if (num > 1000 && num < 100000000) {
+              views = num;
+              return false;
+            }
+          }
+        });
+        
+        // Get poster URL from the posterMap we built earlier
+        const poster = posterMap.get(episodeSlug) || '';
+        
+        // Create series slug
+        const seriesSlug = seriesName.toLowerCase()
+          .replace(/[^a-z0-9\s-]/g, '')
+          .replace(/\s+/g, '-')
+          .replace(/-+/g, '-')
+          .replace(/^-|-$/g, '');
+        
+        if (!seriesSlug) return;
+        
+        // Group by series - accumulate view counts from all episodes
+        if (!episodeMap.has(seriesSlug)) {
+          episodeMap.set(seriesSlug, {
+            id: `${this.prefix}${seriesSlug}`,
+            type: 'series',
+            name: seriesName,
+            poster: poster,
+            totalViews: views || 0,
+            episodeCount: 1,
+            maxEpisodeViews: views || 0,
+            episode1Slug: `${seriesSlug}-episode-1`
+          });
+        } else {
+          const series = episodeMap.get(seriesSlug);
+          series.episodeCount++;
+          if (views) {
+            series.totalViews += views;
+            if (views > series.maxEpisodeViews) {
+              series.maxEpisodeViews = views;
+            }
+          }
+          // Update poster if we have one and series doesn't
+          if (!series.poster && poster) {
+            series.poster = poster;
+          }
+        }
+      });
+      
+      // Convert to array and use average views per episode as the viewCount
+      const seriesArray = Array.from(episodeMap.values()).map(series => ({
+        ...series,
+        viewCount: series.maxEpisodeViews, // Use max episode views as indicator
+        ratingType: 'views'
+      }));
+      
+      logger.info(`[HentaiTV] Found ${seriesArray.length} unique series with view counts from search page ${page}`);
+      
+      // Fetch additional metadata (genres, studio) for top items
+      const batchSize = 5;
+      for (let i = 0; i < Math.min(seriesArray.length, 20); i += batchSize) {
+        const batch = seriesArray.slice(i, i + batchSize);
+        await Promise.all(batch.map(async (series) => {
+          try {
+            const pageData = await this.fetchEpisodePageMetadata(series.episode1Slug);
+            if (pageData.genres && pageData.genres.length > 0) {
+              series.genres = pageData.genres;
+            }
+            if (pageData.description) {
+              series.description = pageData.description.substring(0, 300);
+            }
+            if (pageData.studio) {
+              series.studio = pageData.studio;
+            }
+          } catch (e) {
+            // Ignore errors, genres are optional
+          }
+        }));
+      }
+      
+      return seriesArray;
+      
+    } catch (error) {
+      logger.error(`[HentaiTV] Search page catalog error: ${error.message}`);
+      return [];
+    }
+  }
+
+  /**
    * Get catalog - uses WordPress API for fast access to episodes with full metadata
    * @param {number} page - Page number (1-indexed)
    * @param {string} genre - Optional genre filter (not supported by API, falls back to scraping)
-   * @param {string} sortBy - Sort order
+   * @param {string} sortBy - Sort order: 'popular' uses search page with views, 'recent' uses API
    */
   async getCatalog(page = 1, genre = null, sortBy = 'popular') {
     try {
+      // For "popular" sort, use search page which includes view counts
+      if (sortBy === 'popular' && !genre) {
+        return this.getCatalogFromSearchPage(page);
+      }
+      
       logger.info(`[HentaiTV] Fetching catalog page ${page} via WordPress API`);
       
       // Use WordPress API - gives us 20 episodes per page with full metadata
