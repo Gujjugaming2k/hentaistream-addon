@@ -236,18 +236,23 @@ class HentaiSeaScraper extends BaseScraper {
         }
       });
       
-      logger.info(`[HentaiSea] Found ${items.length} trending items, fetching metadata...`);
-      
       // Fetch metadata from individual series pages in batches
-      // This gets genres, year, description, studio that aren't on trending page
-      // Uses same selectors as getMetadata() for consistency
-      const batchSize = 5;
-      for (let i = 0; i < items.length; i += batchSize) {
-        const batch = items.slice(i, i + batchSize);
+      // Only fetch for top items to keep response time reasonable
+      // Rest will load metadata when user clicks on them
+      const maxMetadataFetch = 15; // Only fetch metadata for top 15 items
+      const batchSize = 10; // Increased batch size for faster parallel fetching
+      const itemsToFetch = items.slice(0, maxMetadataFetch);
+      
+      if (itemsToFetch.length > 0) {
+        logger.info(`[HentaiSea] Fetching metadata for top ${itemsToFetch.length} trending items...`);
+      }
+      
+      for (let i = 0; i < itemsToFetch.length; i += batchSize) {
+        const batch = itemsToFetch.slice(i, i + batchSize);
         await Promise.all(batch.map(async (item) => {
           try {
             const metaUrl = `${this.baseUrl}/watch/${item.slug}/`;
-            const metaResponse = await this.client.get(metaUrl, { timeout: 8000 });
+            const metaResponse = await this.client.get(metaUrl, { timeout: 5000 }); // Reduced timeout
             const $meta = cheerio.load(metaResponse.data);
             
             // Get genres from series page using rel="tag" links (same as getMetadata)

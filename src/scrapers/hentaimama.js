@@ -1246,19 +1246,32 @@ class HentaiMamaScraper {
         if (actionMatch && aMatch) {
           logger.info(`Making AJAX call: action=${actionMatch[1]}, a=${aMatch[1]}`);
           
-          const ajaxResponse = await axios.post(
-            `${this.baseUrl}/wp-admin/admin-ajax.php`,
-            new URLSearchParams({
-              action: actionMatch[1],
-              a: aMatch[1]
-            }),
-            {
+          let ajaxResponse;
+          const ajaxUrl = `${this.baseUrl}/wp-admin/admin-ajax.php`;
+          const postData = new URLSearchParams({
+            action: actionMatch[1],
+            a: aMatch[1]
+          }).toString();
+          
+          // Use Cloudflare Worker proxy if available (for cloud hosting)
+          if (CF_PROXY_URL) {
+            // Route POST through proxy by encoding params in URL
+            const proxyUrl = `${CF_PROXY_URL}?url=${encodeURIComponent(ajaxUrl)}&method=POST&body=${encodeURIComponent(postData)}`;
+            ajaxResponse = await axios.get(proxyUrl, {
+              timeout: 30000,
+              headers: {
+                'Accept': 'application/json',
+              }
+            });
+          } else {
+            // Direct request (works locally)
+            ajaxResponse = await axios.post(ajaxUrl, postData, {
               headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
                 'Referer': pageUrl
               }
-            }
-          );
+            });
+          }
 
           // Response is array of iframe HTML strings
           if (ajaxResponse.data && Array.isArray(ajaxResponse.data)) {
@@ -1337,10 +1350,16 @@ class HentaiMamaScraper {
         return streams;
       }
 
-      logger.warn(`No streams found for ${cleanId}`);
+      logger.debug(`No streams found for ${cleanId}`);
       return [];
 
     } catch (error) {
+      // 404 errors are expected when content doesn't exist on this provider
+      // Don't log these as errors to reduce noise
+      if (error.response?.status === 404 || error.message?.includes('404')) {
+        logger.debug(`[HentaiMama] Content not found: ${episodeId}`);
+        return [];
+      }
       logger.error(`Error fetching HentaiMama streams for ${episodeId}:`, error.message);
       throw error;
     }

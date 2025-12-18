@@ -28,6 +28,8 @@ export default {
 
     const url = new URL(request.url);
     const targetUrl = url.searchParams.get('url');
+    const methodOverride = url.searchParams.get('method'); // Support method override via URL param
+    const bodyParam = url.searchParams.get('body'); // Support body via URL param for GET-based proxy
 
     if (!targetUrl) {
       return new Response(JSON.stringify({ error: 'Missing url parameter' }), {
@@ -39,6 +41,9 @@ export default {
     try {
       // Decode the URL
       const decodedUrl = decodeURIComponent(targetUrl);
+      
+      // Determine the actual method to use
+      const actualMethod = methodOverride || request.method;
       
       // Build headers that mimic a real browser
       const headers = new Headers({
@@ -58,16 +63,22 @@ export default {
         'Upgrade-Insecure-Requests': '1',
       });
 
-      // For POST requests, forward the body
+      // For POST requests, get body from URL param or request body
       let body = null;
-      if (request.method === 'POST') {
-        body = await request.text();
-        headers.set('Content-Type', request.headers.get('Content-Type') || 'application/x-www-form-urlencoded');
+      if (actualMethod === 'POST') {
+        if (bodyParam) {
+          // Body passed as URL parameter (for GET-based proxy calls)
+          body = decodeURIComponent(bodyParam);
+        } else if (request.method === 'POST') {
+          // Body from actual POST request
+          body = await request.text();
+        }
+        headers.set('Content-Type', 'application/x-www-form-urlencoded');
       }
 
       // Fetch the target URL
       const response = await fetch(decodedUrl, {
-        method: request.method,
+        method: actualMethod,
         headers,
         body,
         redirect: 'follow',
