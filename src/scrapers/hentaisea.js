@@ -304,7 +304,16 @@ class HentaiSeaScraper extends BaseScraper {
                   return false; // Break
                 }
               });
-              if (desc) item.description = desc.substring(0, 500);
+              if (desc) {
+                // Truncate at word boundary
+                if (desc.length > 450) {
+                  desc = desc.substring(0, 450);
+                  const lastSpace = desc.lastIndexOf(' ');
+                  if (lastSpace > 300) desc = desc.substring(0, lastSpace);
+                  desc = desc.trim() + '...';
+                }
+                item.description = desc;
+              }
             }
             
             // Get studio (same selector as getMetadata)

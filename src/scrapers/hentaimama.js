@@ -727,7 +727,15 @@ class HentaiMamaScraper {
                             '';
           
           if (seriesDesc && seriesDesc.length > 10) {
-            series.description = seriesDesc.replace(/Watch.*?HentaiMama/gi, '').trim().substring(0, 300);
+            let desc = seriesDesc.replace(/Watch.*?HentaiMama/gi, '').trim();
+            // Truncate at word boundary for catalog display
+            if (desc.length > 350) {
+              desc = desc.substring(0, 350);
+              const lastSpace = desc.lastIndexOf(' ');
+              if (lastSpace > 200) desc = desc.substring(0, lastSpace);
+              desc = desc.trim() + '...';
+            }
+            series.description = desc;
           }
           
           // Extract episode-specific thumbnails from series page
@@ -964,9 +972,9 @@ class HentaiMamaScraper {
                        $('.description').text().trim() ||
                        '';
 
-      // Clean up description
+      // Clean up description - remove promotional text but don't truncate
+      // Stremio handles display truncation; we want full description for meta view
       description = description.replace(/Watch.*?HentaiMama/gi, '').trim();
-      description = description.substring(0, 500); // Limit length
 
       // Try to extract tags/genres
       const genres = [];

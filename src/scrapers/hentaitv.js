@@ -600,12 +600,21 @@ class HentaiTVScraper {
         const episodeYear = episodeDate ? extractYear(episodeDate) : null;
         
         if (!seriesMap.has(slug)) {
+          // Truncate description at word boundary for catalog
+          let catalogDesc = description;
+          if (catalogDesc.length > 350) {
+            catalogDesc = catalogDesc.substring(0, 350);
+            const lastSpace = catalogDesc.lastIndexOf(' ');
+            if (lastSpace > 200) catalogDesc = catalogDesc.substring(0, lastSpace);
+            catalogDesc = catalogDesc.trim() + '...';
+          }
+          
           seriesMap.set(slug, {
             id: `${this.prefix}${slug}`,
             type: 'series',
             name: seriesName,
             poster: poster,
-            description: description.substring(0, 300) || `Watch ${seriesName} in HD`,
+            description: catalogDesc || `Watch ${seriesName} in HD`,
             genres: null, // Will be fetched from episode page
             episodeCount: 1,
             latestEpisode: episodeNum,
@@ -942,12 +951,21 @@ class HentaiTVScraper {
         const rawDesc = ep.content?.rendered || '';
         const description = rawDesc.replace(/<[^>]*>/g, '').trim();
         
+        // Truncate description at word boundary for catalog
+        let desc = description;
+        if (desc.length > 350) {
+          desc = desc.substring(0, 350);
+          const lastSpace = desc.lastIndexOf(' ');
+          if (lastSpace > 200) desc = desc.substring(0, lastSpace);
+          desc = desc.trim() + '...';
+        }
+        
         seriesMap.set(slug, {
           id: `${this.prefix}${slug}`,
           type: 'series',
           name: seriesName,
           poster: poster,
-          description: description.substring(0, 300) || `Watch ${seriesName} in HD`,
+          description: desc || `Watch ${seriesName} in HD`,
           genres: ['Hentai', 'Anime', 'Adult Animation']
         });
       }
