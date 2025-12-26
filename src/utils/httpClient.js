@@ -173,16 +173,28 @@ async function fetchViaProxy(url, options = {}) {
  */
 async function batchFetch(urls, options = {}) {
   if (!CF_PROXY_URL) {
-    // Fall back to parallel individual fetches
+    // Fall back to parallel individual fetches using axios with full browser headers
+    // This matches what the scrapers use for direct requests
+    const axios = require('axios');
     logger.warn('[HttpClient] No CF_PROXY_URL set, falling back to parallel fetch');
-    return Promise.all(urls.map(async (url) => {
+    
+    // Rate limit to avoid hammering the server
+    const CONCURRENT_LIMIT = 10;
+    const pLimit = require('p-limit');
+    const limiter = pLimit(CONCURRENT_LIMIT);
+    
+    return Promise.all(urls.map((url) => limiter(async () => {
       try {
-        const result = await fetch(url, options);
-        return { url, status: result.status, body: result.data, success: result.status < 400 };
+        const response = await axios.get(url, {
+          timeout: options.timeout || 15000,
+          headers: buildHeaders(),
+        });
+        return { url, status: response.status, body: response.data, success: response.status < 400 };
       } catch (error) {
-        return { url, status: 0, error: error.message, success: false };
+        const status = error.response?.status || 0;
+        return { url, status, error: error.message, success: false };
       }
-    }));
+    })));
   }
   
   const BATCH_SIZE = 15; // URLs per batch request (CF Worker handles up to 20)
@@ -194,13 +206,13 @@ async function batchFetch(urls, options = {}) {
     
     try {
       const proxyUrl = new URL(CF_PROXY_URL);
-      // Encode URLs and join with comma
-      const encodedUrls = batch.map(u => encodeURIComponent(u)).join(',');
-      proxyUrl.searchParams.set('urls', encodedUrls);
+      // Join URLs with comma - searchParams.set() handles encoding automatically
+      // Do NOT pre-encode with encodeURIComponent() - that causes double-encoding!
+      proxyUrl.searchParams.set('urls', batch.join(','));
       
       if (options.method === 'POST' && options.body) {
         proxyUrl.searchParams.set('method', 'POST');
-        proxyUrl.searchParams.set('body', encodeURIComponent(options.body));
+        proxyUrl.searchParams.set('body', options.body);
       }
       
       logger.info(`[HttpClient] Batch fetching ${batch.length} URLs via CF Worker`);

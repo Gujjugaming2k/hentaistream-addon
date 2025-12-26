@@ -18,16 +18,18 @@ const SCRAPER_MAP = {
 
 /**
  * Get all available scrapers for catalog aggregation
+ * HentaiMama is the PRIMARY source (first in array) - it has the best ratings
  * @param {Object} userConfig - User configuration with enabled providers
  * @returns {Array<Object>} Array of scraper instances
  */
 function getAllScrapers(userConfig = DEFAULT_CONFIG) {
   const scrapers = [];
   
-  // Only include enabled providers
+  // HentaiMama FIRST - it's the primary source with actual star ratings
   if (userConfig.providers.includes('hmm')) {
     scrapers.push(hentaimamaScraper);
   }
+  // Secondary providers
   if (userConfig.providers.includes('hse')) {
     scrapers.push(hentaiseaScraper);
   }
@@ -35,7 +37,7 @@ function getAllScrapers(userConfig = DEFAULT_CONFIG) {
     scrapers.push(hentaitvScraper);
   }
   
-  // Ensure at least one scraper
+  // Ensure at least one scraper (HentaiMama as default)
   if (scrapers.length === 0) {
     scrapers.push(hentaimamaScraper);
   }
@@ -129,6 +131,19 @@ function applyTimeFilter(series, filterType) {
 }
 
 /**
+ * Get effective rating for sorting, using weighted average when available
+ * This ensures HentaiMama's actual ratings take precedence over trending/view-based ratings
+ */
+function getEffectiveRating(series) {
+  // If we have a rating breakdown, use weighted average
+  if (series.ratingBreakdown && Object.keys(series.ratingBreakdown).length > 0) {
+    return ratingNormalizer.calculateWeightedAverage(series.ratingBreakdown);
+  }
+  // Fall back to direct rating
+  return series.rating ?? 0;
+}
+
+/**
  * Apply sorting based on catalog type
  * @param {Array} series - Array of series objects
  * @param {string} sortType - 'date', 'rating', 'alphabetical', or 'default'
@@ -144,11 +159,18 @@ function applySorting(series, sortType) {
       break;
       
     case 'rating':
-      // Sort by rating, highest first (default 0 for no rating)
+      // Sort by weighted rating, highest first
+      // This ensures HentaiMama ratings (weight 5.0) dominate over trending (weight 1.0)
+      // Secondary sort by name for stable ordering when ratings are equal
       sorted.sort((a, b) => {
-        const ratingA = a.rating ?? 0;
-        const ratingB = b.rating ?? 0;
-        return ratingB - ratingA;
+        const ratingA = getEffectiveRating(a);
+        const ratingB = getEffectiveRating(b);
+        const ratingDiff = ratingB - ratingA;
+        // If ratings are equal (or very close), sort alphabetically for stable order
+        if (Math.abs(ratingDiff) < 0.01) {
+          return (a.name || '').localeCompare(b.name || '');
+        }
+        return ratingDiff;
       });
       break;
       

@@ -138,11 +138,18 @@ function calculateAverageRating(ratingBreakdown) {
 /**
  * Calculate metadata quality score for a series
  * Higher score = more complete metadata
+ * HentaiMama items get bonus points as it's the primary source with actual ratings
  * @param {Object} series - Series object
  * @returns {number} Quality score
  */
 function calculateMetadataScore(series) {
   let score = 0;
+  
+  // Check if this is a HentaiMama item (primary source bonus)
+  const isHentaiMama = series.id && series.id.startsWith('hmm-');
+  if (isHentaiMama) {
+    score += 10; // Big bonus for being from primary source
+  }
   
   // +3 for having a description (most important)
   if (series.description && series.description.length > 20) {
@@ -167,9 +174,12 @@ function calculateMetadataScore(series) {
     score += 1;
   }
   
-  // +1 for having a rating
+  // +3 for having an actual rating (not view-based)
+  // HentaiMama provides real user ratings which are more valuable
   if (series.rating && series.rating > 0) {
-    score += 1;
+    score += 3;
+    // Extra bonus for high ratings (8+)
+    if (series.rating >= 8) score += 2;
   }
   
   return score;
@@ -329,8 +339,12 @@ function aggregateCatalogs(providerCatalogs) {
   
   logger.info(`Aggregating catalogs from ${providerCatalogs.length} providers`);
   
+  // Track how many items from each provider end up in final results
+  const providerStats = {};
+  
   for (const { provider, catalog } of providerCatalogs) {
     logger.info(`Processing ${catalog.length} series from ${provider}`);
+    providerStats[provider] = { total: catalog.length, merged: 0, added: 0 };
     
     for (const series of catalog) {
       // Find if this series already exists in aggregated catalog
@@ -340,8 +354,10 @@ function aggregateCatalogs(providerCatalogs) {
         // Merge with existing series (may swap primary based on metadata quality)
         aggregated[existingIndex] = mergeSeries(aggregated[existingIndex], series);
         logger.debug(`Merged duplicate: ${series.name} from ${provider}`);
+        providerStats[provider].merged++;
       } else {
         // Add as new series
+        providerStats[provider].added++;
         const getPrefixFromId = (id) => {
           const match = id.match(/^([a-z]+)-/);
           return match ? match[1] : 'unknown';
@@ -405,6 +421,21 @@ function aggregateCatalogs(providerCatalogs) {
   });
   
   const duration = Date.now() - startTime;
+  
+  // Log detailed provider stats
+  logger.info(`📊 Aggregation stats:`);
+  for (const [prov, stats] of Object.entries(providerStats)) {
+    logger.info(`  ${prov}: ${stats.total} total → ${stats.added} added, ${stats.merged} merged`);
+  }
+  
+  // Log ID prefix distribution
+  const prefixCounts = {};
+  for (const item of aggregated) {
+    const prefix = item.id?.split('-')[0] || 'unknown';
+    prefixCounts[prefix] = (prefixCounts[prefix] || 0) + 1;
+  }
+  logger.info(`📊 Final ID prefixes: ${JSON.stringify(prefixCounts)}`);
+  
   logger.info(`Catalog aggregation complete: ${aggregated.length} unique series from ${providerCatalogs.length} providers (${duration}ms)`);
   
   return aggregated;

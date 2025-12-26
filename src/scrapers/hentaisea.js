@@ -211,8 +211,10 @@ class HentaiSeaScraper extends BaseScraper {
           const year = yearMatch ? parseInt(yearMatch[1]) : null;
           
           // Calculate rating based on position in trending list
+          // Use lower values (7.5 max) since these aren't real user ratings
+          // HentaiMama has actual star ratings which should take priority
           const position = basePosition + i + 1;
-          const rating = Math.max(5.0, Math.round((9.5 - (position * 0.05)) * 10) / 10);
+          const rating = Math.max(5.0, Math.round((7.5 - (position * 0.05)) * 10) / 10);
           
           const item = {
             id: `${this.prefix}${slug}`,

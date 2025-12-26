@@ -16,18 +16,18 @@ const CONFIG = {
   // Default rating for content without ratings (neutral)
   DEFAULT_RATING: 6.0,
   
-  // Provider weights (HentaiMama ratings are most reliable)
+  // Provider weights (HentaiMama ratings are most reliable - PRIMARY SOURCE)
   PROVIDER_WEIGHTS: {
-    hmm: 3.0,  // HentaiMama - direct user ratings, highest weight
-    htv: 1.5,  // HentaiTV - view counts, medium weight
-    hse: 1.5,  // HentaiSea - trending position (when available), medium weight
+    hmm: 5.0,  // HentaiMama - direct user ratings, highest weight (primary source)
+    htv: 1.0,  // HentaiTV - view counts, lower weight
+    hse: 1.0,  // HentaiSea - trending position (when available), lower weight
   },
   
   // View count to rating conversion (logarithmic scale)
-  // Max 8.5 for view-based ratings (direct user ratings can go higher)
+  // Max 7.0 for view-based ratings - HentaiMama's real ratings (8-10) should dominate
   VIEWS: {
-    multiplier: 2.5,
-    maxValue: 8.5,
+    multiplier: 1.5,  // Reduced from 2.5
+    maxValue: 7.0,    // Reduced from 8.5
     logBase: 10
   }
 };
@@ -87,9 +87,10 @@ function normalizeRating(value, type = 'direct') {
       return normalizeViewCount(value);
     
     case 'trending':
-      // Trending position is already converted to a 0-10 rating in the scraper
-      // Just validate and pass through
-      return normalizeDirectRating(value);
+      // Trending position converted to a rating, but capped at 7.5
+      // since it's not a real user rating (HentaiMama ratings should dominate)
+      if (typeof value !== 'number' || isNaN(value)) return null;
+      return Math.min(7.5, normalizeDirectRating(value));
     
     case 'percentage':
       // 0-100% to 0-10
@@ -117,6 +118,7 @@ function normalizeRating(value, type = 'direct') {
  * 
  * @param {Object} ratingBreakdown - Map of provider prefix to rating info
  *   Example: { hmm: { raw: 8.6, normalized: 8.6, type: 'direct' }, hse: null }
+ *   OR:      { hmm: { raw: 8.6, type: 'direct' } } - normalized will be calculated
  * @returns {number} Weighted average rating (0-10), defaults to 6.0 if no ratings
  */
 function calculateWeightedAverage(ratingBreakdown) {
@@ -129,11 +131,32 @@ function calculateWeightedAverage(ratingBreakdown) {
   let hasHentaiMamaRating = false;
   
   for (const [provider, ratingInfo] of Object.entries(ratingBreakdown)) {
-    if (!ratingInfo || ratingInfo.normalized === null || ratingInfo.normalized === undefined) {
-      continue;
+    if (!ratingInfo) continue;
+    
+    // Get or calculate normalized value
+    let normalized = ratingInfo.normalized;
+    
+    // If normalized is missing, calculate it from raw + type
+    if (normalized === null || normalized === undefined) {
+      const raw = ratingInfo.raw;
+      const type = ratingInfo.type || 'direct';
+      
+      if (raw === null || raw === undefined) continue;
+      
+      // Normalize based on type
+      if (type === 'views') {
+        normalized = normalizeViewCount(raw);
+      } else if (type === 'trending') {
+        // Trending ratings are capped at 7.5
+        normalized = Math.min(7.5, normalizeDirectRating(raw));
+      } else {
+        normalized = normalizeDirectRating(raw);
+      }
     }
     
-    const normalized = ratingInfo.normalized;
+    // Skip if normalization failed
+    if (normalized === null || normalized === undefined) continue;
+    
     const weight = CONFIG.PROVIDER_WEIGHTS[provider] || 1.0;
     
     if (provider === 'hmm' && normalized !== null) {

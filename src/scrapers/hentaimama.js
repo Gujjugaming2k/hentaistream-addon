@@ -674,7 +674,6 @@ class HentaiMamaScraper {
             if (!isNaN(ratingValue) && ratingValue >= 0 && ratingValue <= 10) {
               series.rating = ratingValue;
               series.ratingType = 'direct';
-              logger.debug(`[HentaiMama] Found rating ${ratingValue} for ${series.name}`);
             }
           }
           
