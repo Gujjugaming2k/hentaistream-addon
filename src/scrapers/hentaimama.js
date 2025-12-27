@@ -990,7 +990,7 @@ class HentaiMamaScraper {
       let seriesTitle = '';
       let studio = null;
       
-      // Try to fetch year, title, and studio from series page if we have the link
+      // Try to fetch year, title, studio AND DESCRIPTION from series page if we have the link
       if (seriesPageLink) {
         try {
           const seriesUrl = seriesPageLink.startsWith('http') ? seriesPageLink : `${this.baseUrl}${seriesPageLink}`;
@@ -1004,6 +1004,17 @@ class HentaiMamaScraper {
           if (seriesTitle && seriesTitle.length > 2) {
             title = seriesTitle;
             logger.info(`Found proper title from series page: ${title}`);
+          }
+          
+          // CRITICAL: Get description from series page (not episode page promo text)
+          // The series page has the actual story description, episode pages have SEO promo text
+          const seriesDesc = $seriesPage('.wp-content p, .description, .entry-content p').first().text().trim() ||
+                            $seriesPage('meta[property="og:description"]').attr('content') ||
+                            '';
+          if (seriesDesc && seriesDesc.length > 20) {
+            // Clean promotional text and use series description
+            description = seriesDesc.replace(/Watch.*?HentaiMama/gi, '').replace(/Stream.*?for free\./gi, '').trim();
+            logger.info(`Found proper description from series page: ${description.substring(0, 50)}...`);
           }
           
           // Extract year from .date element on series page
