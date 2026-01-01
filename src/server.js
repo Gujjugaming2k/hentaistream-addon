@@ -15,6 +15,15 @@ const cache = require('./cache');
 const slugRegistry = require('./cache/slugRegistry');
 const databaseLoader = require('./utils/databaseLoader');
 
+// Import incremental database update (for midnight updates)
+let runIncrementalUpdate = null;
+try {
+  const updateScript = require('../scripts/update-database');
+  runIncrementalUpdate = updateScript.runIncrementalUpdate;
+} catch (e) {
+  // Script may not be available in all environments
+}
+
 // Track manifest prewarm status to avoid duplicate prewarming
 let manifestPrewarmTriggered = false;
 
@@ -234,6 +243,94 @@ function setupSelfPing() {
     // Trigger first ping silently
   }, 60000);
 }
+
+// Midnight database update scheduler (similar to self-ping)
+function setupMidnightUpdate() {
+  // Only enable in production (Render) - local dev uses manual updates
+  if (config.server.env !== 'production') {
+    logger.info('⏭ Midnight update disabled (not in production mode)');
+    return;
+  }
+  
+  // Check if update function is available
+  if (!runIncrementalUpdate) {
+    logger.warn('⚠️ Midnight update disabled (update script not available)');
+    return;
+  }
+  
+  logger.info('🌙 Midnight database update enabled');
+  
+  // Check every hour if it's midnight (UTC)
+  const CHECK_INTERVAL = 60 * 60 * 1000; // 1 hour
+  let lastUpdateDate = null;
+  
+  async function checkAndRunUpdate() {
+    const now = new Date();
+    const utcHour = now.getUTCHours();
+    const utcDate = now.toISOString().split('T')[0]; // YYYY-MM-DD
+    
+    // Run at midnight UTC (hour 0) and only once per day
+    if (utcHour === 0 && lastUpdateDate !== utcDate) {
+      lastUpdateDate = utcDate;
+      logger.info(`🌙 Starting midnight database update (${utcDate})...`);
+      
+      try {
+        await runIncrementalUpdate();
+        logger.info('✅ Midnight database update completed');
+        
+        // Reload the database after update
+        await databaseLoader.loadDatabase();
+        logger.info('📦 Database reloaded after update');
+      } catch (error) {
+        logger.error(`❌ Midnight update failed: ${error.message}`);
+      }
+    }
+  }
+  
+  // Check immediately on startup (in case server starts at midnight)
+  setTimeout(checkAndRunUpdate, 5000);
+  
+  // Then check every hour
+  setInterval(checkAndRunUpdate, CHECK_INTERVAL);
+}
+
+// Admin endpoint to trigger database update manually
+app.post('/admin/database/update', async (req, res) => {
+  if (!runIncrementalUpdate) {
+    return res.status(503).json({ success: false, error: 'Update script not available' });
+  }
+  
+  try {
+    logger.info('[Admin] Manual database update triggered');
+    await runIncrementalUpdate();
+    await databaseLoader.loadDatabase();
+    const stats = databaseLoader.getStats();
+    logger.info('[Admin] Database update completed');
+    res.json({ success: true, message: 'Database updated', stats });
+  } catch (error) {
+    logger.error(`[Admin] Database update failed: ${error.message}`);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Also allow GET for easy browser access
+app.get('/admin/database/update', async (req, res) => {
+  if (!runIncrementalUpdate) {
+    return res.status(503).json({ success: false, error: 'Update script not available' });
+  }
+  
+  try {
+    logger.info('[Admin] Manual database update triggered (via browser)');
+    await runIncrementalUpdate();
+    await databaseLoader.loadDatabase();
+    const stats = databaseLoader.getStats();
+    logger.info('[Admin] Database update completed');
+    res.json({ success: true, message: 'Database updated', stats });
+  } catch (error) {
+    logger.error(`[Admin] Database update failed: ${error.message}`);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 // Admin endpoint to clear all caches (use after deploying fixes)
 app.post('/admin/cache/clear', async (req, res) => {
@@ -856,6 +953,9 @@ const server = app.listen(config.server.port, async () => {
   
   // Start self-ping mechanism (Render keep-alive)
   setupSelfPing();
+  
+  // Start midnight database update scheduler
+  setupMidnightUpdate();
 });
 
 // Graceful shutdown
