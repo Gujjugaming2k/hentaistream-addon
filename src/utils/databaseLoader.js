@@ -23,8 +23,15 @@ let isLoading = false;
 /**
  * Load the database from disk
  * Prefers gzipped version for smaller bundle size
+ * @param {boolean} forceReload - If true, clears existing database and reloads
  */
-async function loadDatabase() {
+async function loadDatabase(forceReload = false) {
+  // Force reload clears existing database
+  if (forceReload && database) {
+    logger.info('🔄 Force reloading database...');
+    database = null;
+  }
+  
   if (database) return database;
   if (isLoading) {
     // Wait for existing load to complete
@@ -282,6 +289,7 @@ function getBuildDate() {
 
 module.exports = {
   loadDatabase,
+  reloadDatabase: (forceReload = true) => loadDatabase(forceReload),
   getById,
   getBySlug,
   getByProvider,

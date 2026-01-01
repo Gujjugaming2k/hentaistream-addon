@@ -172,8 +172,7 @@ app.use((req, res, next) => {
 // Serve static files from public folder (logo, etc.)
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-// Request logging - streamlined to show only important workflow
-// Skip verbose logging of health checks, static files, and detailed query params
+// Request logging - show essential workflow
 app.use((req, res, next) => {
   // Skip logging for health checks and static files
   const skipPaths = ['/health', '/logo.png', '/favicon.ico'];
@@ -181,8 +180,8 @@ app.use((req, res, next) => {
     return next();
   }
   
-  // Simplified log - just method and path for non-errors
-  // Detailed info is logged by handlers themselves
+  // Log the request path for workflow visibility
+  logger.info(`→ ${req.method} ${req.path}`);
   next();
 });
 
@@ -278,8 +277,8 @@ function setupMidnightUpdate() {
         await runIncrementalUpdate();
         logger.info('✅ Midnight database update completed');
         
-        // Reload the database after update
-        await databaseLoader.loadDatabase();
+        // Force reload the database after update
+        await databaseLoader.loadDatabase(true);
         logger.info('📦 Database reloaded after update');
       } catch (error) {
         logger.error(`❌ Midnight update failed: ${error.message}`);
@@ -303,7 +302,7 @@ app.post('/admin/database/update', async (req, res) => {
   try {
     logger.info('[Admin] Manual database update triggered');
     await runIncrementalUpdate();
-    await databaseLoader.loadDatabase();
+    await databaseLoader.loadDatabase(true); // Force reload
     const stats = databaseLoader.getStats();
     logger.info('[Admin] Database update completed');
     res.json({ success: true, message: 'Database updated', stats });
@@ -322,7 +321,7 @@ app.get('/admin/database/update', async (req, res) => {
   try {
     logger.info('[Admin] Manual database update triggered (via browser)');
     await runIncrementalUpdate();
-    await databaseLoader.loadDatabase();
+    await databaseLoader.loadDatabase(true); // Force reload
     const stats = databaseLoader.getStats();
     logger.info('[Admin] Database update completed');
     res.json({ success: true, message: 'Database updated', stats });
@@ -885,25 +884,33 @@ app.use((err, req, res, next) => {
 });
 
 // Start server
-const server = app.listen(config.server.port, async () => {
-  logger.info(`========================================`);
-  logger.info(`${config.addon.name} v${config.addon.version}`);
-  logger.info(`========================================`);
-  logger.info(`Server running on port ${config.server.port}`);
-  logger.info(`Environment: ${config.server.env}`);
-  logger.info(`Manifest URL: http://localhost:${config.server.port}/manifest.json`);
-  logger.info(`Install URL: stremio://localhost:${config.server.port}/manifest.json`);
-  logger.info(`========================================`);
+const server = app.listen(config.server.port, () => {
+  // Use console.log for startup (winston has buffering issues with redirected output)
+  console.log(`========================================`);
+  console.log(`${config.addon.name} v${config.addon.version}`);
+  console.log(`========================================`);
+  console.log(`Server running on port ${config.server.port}`);
+  console.log(`Environment: ${config.server.env}`);
+  console.log(`Manifest URL: http://localhost:${config.server.port}/manifest.json`);
+  console.log(`Install URL: stremio://localhost:${config.server.port}/manifest.json`);
+  console.log(`========================================`);
   
-  // Initialize pre-bundled database (if available)
-  await initializeDatabase();
+  // Run async initialization in background (don't block startup logs)
+  (async () => {
+    try {
+      // Initialize pre-bundled database (if available)
+      await initializeDatabase();
   
-  // Pre-warm connection pools (HTTP/2 keep-alive)
-  try {
-    await httpClient.prewarmConnections();
-  } catch (error) {
-    logger.warn(`Connection pool warmup failed: ${error.message}`);
-  }
+      // Pre-warm connection pools (HTTP/2 keep-alive)
+      try {
+        await httpClient.prewarmConnections();
+      } catch (error) {
+        logger.warn(`Connection pool warmup failed: ${error.message}`);
+      }
+    } catch (error) {
+      logger.error(`Startup initialization error: ${error.message}`);
+    }
+  })();
   
   // Pre-warm catalog cache in background (don't block startup)
   // SIMPLIFIED: With database, only need to warm "New Releases" for fresh content
