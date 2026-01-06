@@ -1349,9 +1349,8 @@ async function runIncrementalUpdate() {
       
       // Save
       saveDatabase(database);
-      updateFilterOptions(ratingResult.catalog);
       
-      logger.info(`\n✅ Database updated: ${existingCatalog.length} → ${ratingResult.catalog.length} series`);
+      logger.info(`\n✅ Database updated: ${existingCatalog.length} → ${dateResult.catalog.length} series`);
       
       // Clear addon cache so new content is visible immediately
       clearAddonCache();
@@ -1390,7 +1389,6 @@ async function runIncrementalUpdate() {
       database.incrementalUpdate = true;
       
       saveDatabase(database);
-      updateFilterOptions(dateResult.catalog);
       
       logger.info(`\n✅ Cleanup complete: ${existingCatalog.length} → ${dateResult.catalog.length} series`);
       if (rawResult.updatedCount > 0) {
@@ -1406,6 +1404,14 @@ async function runIncrementalUpdate() {
       // Clear addon cache
       clearAddonCache();
     }
+  }
+  
+  // ALWAYS update filter-options.json with fresh counts (time-based counts change daily)
+  // This ensures "This Week", "This Month", etc. are accurate even when no new content was added
+  if (!DRY_RUN) {
+    const finalCatalog = database.catalog || existingCatalog;
+    updateFilterOptions(finalCatalog);
+    logger.info('📊 Filter options updated with fresh counts');
   }
   
   const duration = Date.now() - startTime;

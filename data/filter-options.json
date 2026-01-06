@@ -1,7 +1,7 @@
 {
   "years": {
     "withCounts": [
-      "2025 (273)",
+      "2025 (274)",
       "2024 (107)",
       "2023 (321)",
       "2022 (178)",
@@ -145,7 +145,7 @@
       "2022": 178,
       "2023": 321,
       "2024": 107,
-      "2025": 273
+      "2025": 274
     }
   },
   "studios": {
@@ -369,6 +369,7 @@
       "Knockout (3)",
       "Kyouki no Sybylla (3)",
       "Lanzfh (3)",
+      "Magin Label (3)",
       "Majin petit (3)",
       "miconisomi (3)",
       "Misakura Nankotsu/Harthnir (3)",
@@ -448,8 +449,7 @@
       "Guilty+ (2)",
       "gusya (2)",
       "Hamburg Gakari (2)",
-      "Honey Select (2)",
-      "HY_studio (2)"
+      "Honey Select (2)"
     ],
     "clean": [
       "Pink Pineapple",
@@ -671,6 +671,7 @@
       "Knockout",
       "Kyouki no Sybylla",
       "Lanzfh",
+      "Magin Label",
       "Majin petit",
       "miconisomi",
       "Misakura Nankotsu/Harthnir",
@@ -750,8 +751,7 @@
       "Guilty+",
       "gusya",
       "Hamburg Gakari",
-      "Honey Select",
-      "HY_studio"
+      "Honey Select"
     ],
     "raw": {
       "Pink Pineapple": 312,
@@ -973,6 +973,7 @@
       "Knockout": 3,
       "Kyouki no Sybylla": 3,
       "Lanzfh": 3,
+      "Magin Label": 3,
       "Majin petit": 3,
       "miconisomi": 3,
       "Misakura Nankotsu/Harthnir": 3,
@@ -1052,23 +1053,22 @@
       "Guilty+": 2,
       "gusya": 2,
       "Hamburg Gakari": 2,
-      "Honey Select": 2,
-      "HY_studio": 2
+      "Honey Select": 2
     },
     "total": 300
   },
   "genres": {
     "withCounts": [
-      "Big Boobs (2166)",
+      "Big Boobs (2167)",
       "3D Hentai (1730)",
       "Blowjob (1588)",
       "Creampie (1299)",
-      "Censored (1256)",
+      "Censored (1257)",
       "Ahegao (1206)",
       "Anal (1101)",
       "Big Tits (1090)",
       "Uncensored (1013)",
-      "Blow Job (899)",
+      "Blow Job (900)",
       "Rape (744)",
       "Hd (697)",
       "Hardcore (666)",
@@ -1082,7 +1082,7 @@
       "Schoolgirl (475)",
       "Plot (472)",
       "Yuri (472)",
-      "Fantasy (461)",
+      "Fantasy (462)",
       "Hand Job (435)",
       "Gangbang (429)",
       "Public Sex (418)",
@@ -1165,7 +1165,7 @@
       "Blonde (86)",
       "Footjob (85)",
       "Mind Break (84)",
-      "Cream Pie (82)",
+      "Cream Pie (83)",
       "Mind Control (82)",
       "Twin Tail (82)",
       "NTR (Netorare) (81)",
@@ -3172,16 +3172,16 @@
       "7": 2,
       "69": 1,
       "2007": 1,
-      "Big Boobs": 2166,
+      "Big Boobs": 2167,
       "3D Hentai": 1730,
       "Blowjob": 1588,
       "Creampie": 1299,
-      "Censored": 1256,
+      "Censored": 1257,
       "Ahegao": 1206,
       "Anal": 1101,
       "Big Tits": 1090,
       "Uncensored": 1013,
-      "Blow Job": 899,
+      "Blow Job": 900,
       "Rape": 744,
       "Hd": 697,
       "Hardcore": 666,
@@ -3195,7 +3195,7 @@
       "Schoolgirl": 475,
       "Plot": 472,
       "Yuri": 472,
-      "Fantasy": 461,
+      "Fantasy": 462,
       "Hand Job": 435,
       "Gangbang": 429,
       "Public Sex": 418,
@@ -3278,7 +3278,7 @@
       "Blonde": 86,
       "Footjob": 85,
       "Mind Break": 84,
-      "Cream Pie": 82,
+      "Cream Pie": 83,
       "Mind Control": 82,
       "Twin Tail": 82,
       "NTR (Netorare)": 81,
@@ -4227,18 +4227,18 @@
   },
   "timePeriods": {
     "withCounts": [
-      "This Week (10)",
-      "This Month (18)",
-      "3 Months (33)",
-      "This Year (141)"
+      "This Week (3)",
+      "This Month (12)",
+      "3 Months (34)",
+      "This Year (142)"
     ],
     "raw": {
-      "This Week": 10,
-      "This Month": 18,
-      "3 Months": 33,
-      "This Year": 141
+      "This Week": 3,
+      "This Month": 12,
+      "3 Months": 34,
+      "This Year": 142
     }
   },
-  "generatedAt": "2026-01-02T22:04:41.411Z",
-  "catalogSize": 4256
+  "generatedAt": "2026-01-06T13:54:18.369Z",
+  "catalogSize": 4257
 }
