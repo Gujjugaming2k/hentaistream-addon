@@ -465,6 +465,12 @@ function getBaseManifest() {
       configurable: true,  // Will be true in Phase 3 with config UI
       configurationRequired: false,
     },
+    
+    // Stremio Addons Config
+    stremioAddonsConfig: {
+      issuer: "https://stremio-addons.net",
+      signature: "eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2In0..XsFMxPKmoU1Ds0JM-xqn7Q.gFOIqMqNjBx0fMu-WcWvUWV6Xk6DJFTNMtSFIUNrZnCwBJhmsUa5bnP5t7B7DsHwGdxOIajHnn0WhZhdSVUnRYpM1emw1gBmgqCS8gTztvmyKKJ1iQn8gPj3q3Vxtu4w.dkqifJARWq30iDu-Kj3noA"
+    },
   };
 }
 
