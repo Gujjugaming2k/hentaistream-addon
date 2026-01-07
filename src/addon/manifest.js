@@ -372,10 +372,20 @@ function getBaseManifest() {
     description: config.addon.description,
     
     // Resources provided by this addon
+    // CRITICAL: Must use explicit resource objects with types and idPrefixes
+    // for Stremio to properly route requests when using custom types
     resources: [
       'catalog',
-      'meta',
-      'stream',
+      {
+        name: 'meta',
+        types: ['series', 'hentai'],
+        idPrefixes: ['hmm-', 'hse-', 'htv-', 'hs-']
+      },
+      {
+        name: 'stream',
+        types: ['series', 'hentai'],
+        idPrefixes: ['hmm-', 'hse-', 'htv-', 'hs-']
+      }
     ],
     
     // Custom content type 'hentai' - appears as separate type in Stremio Discover
@@ -384,6 +394,7 @@ function getBaseManifest() {
     types: ['hentai', 'series'],
     
     // ID prefixes for routing (all supported providers)
+    // NOTE: These are also declared per-resource above for explicit routing
     idPrefixes: ['hmm-', 'hse-', 'htv-', 'hs-'],
     
     // Multiple catalogs for different sorting/filtering options

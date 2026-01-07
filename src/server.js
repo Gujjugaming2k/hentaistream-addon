@@ -220,7 +220,9 @@ app.use((req, res, next) => {
   
   // Check per-IP concurrent requests
   if (currentForIP >= MAX_CONCURRENT_PER_IP) {
-    logger.warn(`[RateLimit] Too many requests from ${ip}: ${currentForIP}/${MAX_CONCURRENT_PER_IP}`);
+    // Obscure IP for privacy (show only hash)
+    const ipHash = ip.split('.').pop() || ip.slice(-4);
+    logger.warn(`[RateLimit] Too many requests from client ***.${ipHash}: ${currentForIP}/${MAX_CONCURRENT_PER_IP}`);
     return res.status(429).json({ error: 'Too many concurrent requests. Please wait.' });
   }
   

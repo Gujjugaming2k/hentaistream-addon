@@ -22,7 +22,7 @@ const logger = require('../utils/logger');
 async function getManifestFresh() {
   try {
     const manifest = await getManifest();
-    logger.info(`Manifest loaded with ${manifest.catalogs.length} catalogs`);
+    logger.debug(`Manifest loaded with ${manifest.catalogs.length} catalogs`);
     return manifest;
   } catch (err) {
     logger.error('Failed to load manifest:', err.message);

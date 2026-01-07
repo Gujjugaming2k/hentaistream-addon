@@ -52,7 +52,17 @@ services:
         value: com.hentaistream.addon
       
       - key: ADDON_VERSION
-        value: 0.1.0
+        value: 1.0.0
       
       - key: ADDON_DESCRIPTION
-        value: "🔞 18+ ONLY - Premium adult anime streaming\n\n📺 3 Providers: HentaiMama, HentaiTV, HentaiSea\n⭐ Aggregated ratings from all sources\n\n📂 Catalogs: Top Rated, Weekly/Monthly Releases, A-Z, Studios, Release Year\n🏷️ 100+ genre filters\n🎬 200+ animation studios"
+        value: "18+ ONLY - Premium adult anime streaming\n\n 3 Providers: HentaiMama, HentaiTV, HentaiSea\n Aggregated ratings from all sources\n\n Catalogs: Top Rated, Weekly/Monthly Releases, A-Z, Studios, Release Year\n 100+ genre filters\n 200+ animation studios"
+      
+      # Cloudflare Worker URLs for stream scraping
+      - key: WORKER_HENTAIMAMA
+        value: https://hentaimama.kkeypop3750.workers.dev
+      
+      - key: WORKER_HENTAISEA
+        value: https://hentaisea.kkeypop3750.workers.dev
+      
+      - key: WORKER_HENTAITV
+        value: https://hentaitv.kkeypop3750.workers.dev
