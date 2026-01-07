@@ -8,7 +8,8 @@
 
 const catalogHandler = require('./handlers/catalog');
 const metaHandler = require('./handlers/meta');
-const streamHandler = require('./handlers/stream');
+// Use Cloudflare Workers-based stream handler
+const streamHandler = require('./handlers/stream-workers');
 const { getManifest } = require('./manifest');
 const logger = require('../utils/logger');
 
