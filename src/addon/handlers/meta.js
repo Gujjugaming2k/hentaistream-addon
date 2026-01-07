@@ -236,11 +236,15 @@ function buildMetaResponse(data, dbData) {
       // Build videos array from episodes with individual thumbnails and release dates
       // Handle both old format (episodeNumber) and new format (number)
       // NOTE: RAW status is shown in STREAM name, not episode title
+      // CRITICAL: Use series ID (data.seriesId or data.id), NOT episode ID (ep.id)
+      // ep.id contains the episode slug (like "hmm-series-name-episode-1")
+      // Video IDs must be "{series_id}:1:{episode_num}" for proper stream routing
       videos: (data.episodes || []).map(ep => {
         const epNum = ep.number || ep.episodeNumber || 1;
         const epTitle = ep.title || ep.name || `Episode ${epNum}`;
+        const seriesId = data.seriesId || data.id; // Use series ID, not episode ID
         return {
-          id: `${ep.id}:1:${epNum}`,
+          id: `${seriesId}:1:${epNum}`,
           title: epTitle,
           season: 1,
           episode: epNum,
