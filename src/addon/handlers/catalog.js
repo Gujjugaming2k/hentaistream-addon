@@ -1,9 +1,36 @@
 const cache = require('../../cache');
 const logger = require('../../utils/logger');
-const hentaimamaScraper = require('../../scrapers/hentaimama');
-const oppaiStreamScraper = require('../../scrapers/oppaistream');
-const hentaiseaScraper = require('../../scrapers/hentaisea');
-const hentaitvScraper = require('../../scrapers/hentaitv');
+// LAZY LOAD: Scrapers only loaded when needed (database miss)
+// This saves ~50MB+ memory when database mode is active
+let hentaimamaScraper = null;
+let oppaiStreamScraper = null;
+let hentaiseaScraper = null;
+let hentaitvScraper = null;
+
+function getScraperLazy(name) {
+  switch (name) {
+    case 'hmm':
+    case 'hentaimama':
+      if (!hentaimamaScraper) hentaimamaScraper = require('../../scrapers/hentaimama');
+      return hentaimamaScraper;
+    case 'hse':
+    case 'hentaisea':
+      if (!hentaiseaScraper) hentaiseaScraper = require('../../scrapers/hentaisea');
+      return hentaiseaScraper;
+    case 'htv':
+    case 'hentaitv':
+      if (!hentaitvScraper) hentaitvScraper = require('../../scrapers/hentaitv');
+      return hentaitvScraper;
+    case 'os':
+    case 'oppaistream':
+      if (!oppaiStreamScraper) oppaiStreamScraper = require('../../scrapers/oppaistream');
+      return oppaiStreamScraper;
+    default:
+      if (!hentaimamaScraper) hentaimamaScraper = require('../../scrapers/hentaimama');
+      return hentaimamaScraper;
+  }
+}
+
 const { 
   aggregateCatalogs, 
   isDuplicate, 
@@ -20,11 +47,11 @@ const { isWithinWeek, isWithinMonth, compareDatesNewestFirst } = require('../../
 const { shouldIncludeSeries, DEFAULT_CONFIG } = require('../../utils/configParser');
 const { genreMatcher } = require('../../utils/genreMatcher');
 
-// Scraper map for easy lookup
+// Scraper map uses lazy loading to reduce memory
 const SCRAPER_MAP = {
-  hmm: hentaimamaScraper,
-  hse: hentaiseaScraper,
-  htv: hentaitvScraper
+  get hmm() { return getScraperLazy('hmm'); },
+  get hse() { return getScraperLazy('hse'); },
+  get htv() { return getScraperLazy('htv'); }
 };
 
 /**
@@ -136,6 +163,7 @@ function genreNameToSlug(genreName, provider = 'hentaimama') {
 /**
  * Get all available scrapers for catalog aggregation
  * HentaiMama is the PRIMARY source (first in array) - it has the best ratings
+ * LAZY LOADED: Scrapers only instantiated when this function is called
  * @param {Object} userConfig - User configuration with enabled providers
  * @returns {Array<Object>} Array of scraper instances
  */
@@ -144,19 +172,19 @@ function getAllScrapers(userConfig = DEFAULT_CONFIG) {
   
   // HentaiMama FIRST - it's the primary source with actual star ratings
   if (userConfig.providers.includes('hmm')) {
-    scrapers.push(hentaimamaScraper);
+    scrapers.push(getScraperLazy('hmm'));
   }
   // Secondary providers
   if (userConfig.providers.includes('hse')) {
-    scrapers.push(hentaiseaScraper);
+    scrapers.push(getScraperLazy('hse'));
   }
   if (userConfig.providers.includes('htv')) {
-    scrapers.push(hentaitvScraper);
+    scrapers.push(getScraperLazy('htv'));
   }
   
   // Ensure at least one scraper (HentaiMama as default)
   if (scrapers.length === 0) {
-    scrapers.push(hentaimamaScraper);
+    scrapers.push(getScraperLazy('hmm'));
   }
   
   return scrapers;
@@ -164,21 +192,22 @@ function getAllScrapers(userConfig = DEFAULT_CONFIG) {
 
 /**
  * Get scraper based on catalog ID or prefix
+ * LAZY LOADED: Scraper modules only loaded when needed
  */
 function getScraper(id) {
   if (id.startsWith('hentaimama-') || id.startsWith('hmm-')) {
-    return hentaimamaScraper;
+    return getScraperLazy('hmm');
   }
   if (id.startsWith('hentaisea-') || id.startsWith('hse-')) {
-    return hentaiseaScraper;
+    return getScraperLazy('hse');
   }
   if (id.startsWith('hentaitv-') || id.startsWith('htv-')) {
-    return hentaitvScraper;
+    return getScraperLazy('htv');
   }
   if (id.startsWith('oppaistream-') || id.startsWith('os-')) {
-    return oppaiStreamScraper;
+    return getScraperLazy('os');
   }
-  return hentaimamaScraper;  // Default
+  return getScraperLazy('hmm');  // Default
 }
 
 /**

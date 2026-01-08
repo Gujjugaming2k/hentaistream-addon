@@ -54,20 +54,22 @@ export default {
     }
 
     try {
-      // Check Workers KV cache first (instant response)
-      const cacheKey = `stream:hmm:${episodeId}`;
-      if (env.STREAM_CACHE) {
-        const cached = await env.STREAM_CACHE.get(cacheKey);
-        if (cached) {
-          return new Response(cached, {
-            headers: {
-              ...corsHeaders,
-              'Content-Type': 'application/json',
-              'Cache-Control': 'public, max-age=180',
-              'X-Cache': 'HIT'
-            }
-          });
-        }
+      // Use Cloudflare Cache API (free, no write limits unlike KV)
+      const cacheUrl = new URL(request.url);
+      cacheUrl.searchParams.set('_cache', episodeId);
+      const cacheKey = new Request(cacheUrl.toString());
+      const cache = caches.default;
+      
+      const cachedResponse = await cache.match(cacheKey);
+      if (cachedResponse) {
+        return new Response(cachedResponse.body, {
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'application/json',
+            'Cache-Control': 'public, max-age=180',
+            'X-Cache': 'HIT'
+          }
+        });
       }
 
       // Fetch episode page with full browser headers
@@ -93,12 +95,8 @@ export default {
       const result = { streams };
       const json = JSON.stringify(result);
 
-      // Cache in Workers KV (persist for 3 minutes)
-      if (env.STREAM_CACHE) {
-        ctx.waitUntil(env.STREAM_CACHE.put(cacheKey, json, { expirationTtl: 180 }));
-      }
-
-      return new Response(json, {
+      // Cache using Cloudflare Cache API (free, no limits)
+      const finalResponse = new Response(json, {
         headers: {
           ...corsHeaders,
           'Content-Type': 'application/json',
@@ -106,6 +104,9 @@ export default {
           'X-Cache': 'MISS'
         }
       });
+      
+      ctx.waitUntil(cache.put(cacheKey, finalResponse.clone()));
+      return finalResponse;
 
     } catch (error) {
       return jsonResponse({ error: error.message, stack: error.stack }, 500, corsHeaders);

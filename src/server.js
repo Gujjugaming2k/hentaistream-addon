@@ -608,6 +608,10 @@ app.get('/image-proxy', async (req, res) => {
 
 // Video proxy endpoint for HentaiSea (IP-restricted videos)
 // This fetches a FRESH authenticated URL and proxies the video
+// NOTE: axios and cheerio are already imported at top of file
+const videoProxyAxios = require('axios');
+const videoProxyCheerio = require('cheerio');
+
 app.get('/video-proxy', async (req, res) => {
   try {
     const episodeId = req.query.episodeId;
@@ -617,8 +621,6 @@ app.get('/video-proxy', async (req, res) => {
       return res.status(400).send('Missing episodeId or jwplayer URL');
     }
 
-    const axios = require('axios');
-    const cheerio = require('cheerio');
     const range = req.headers.range;
     
     let videoUrl;
@@ -628,7 +630,7 @@ app.get('/video-proxy', async (req, res) => {
       logger.debug(`Video proxy: Fetching fresh auth from jwplayer...`);
       
       try {
-        const jwResponse = await axios.get(jwplayerUrl, {
+        const jwResponse = await videoProxyAxios.get(jwplayerUrl, {
           headers: {
             'Referer': 'https://hentaisea.com/',
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -654,14 +656,14 @@ app.get('/video-proxy', async (req, res) => {
       const episodeUrl = `https://hentaisea.com/episodes/${slug}/`;
       
       try {
-        const epResponse = await axios.get(episodeUrl, {
+        const epResponse = await videoProxyAxios.get(episodeUrl, {
           headers: {
             'Referer': 'https://hentaisea.com/',
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
           }
         });
         
-        const $ = cheerio.load(epResponse.data);
+        const $ = videoProxyCheerio.load(epResponse.data);
         
         // Find the play button to get post ID
         const playBtn = $('a.activador, a[data-num], .dooplay_player_option').first();
@@ -670,7 +672,7 @@ app.get('/video-proxy', async (req, res) => {
         
         if (postId) {
           // Get the player via AJAX
-          const ajaxResponse = await axios.post('https://hentaisea.com/wp-admin/admin-ajax.php', 
+          const ajaxResponse = await videoProxyAxios.post('https://hentaisea.com/wp-admin/admin-ajax.php', 
             `action=doo_player_ajax&post=${postId}&nume=${nume}&type=movie`,
             {
               headers: {
@@ -690,7 +692,7 @@ app.get('/video-proxy', async (req, res) => {
             const jwUrl = jwMatch[0].replace(/\\u0026/g, '&').replace(/&amp;/g, '&');
             
             // Fetch jwplayer page for fresh auth
-            const jwResponse = await axios.get(jwUrl, {
+            const jwResponse = await videoProxyAxios.get(jwUrl, {
               headers: {
                 'Referer': 'https://hentaisea.com/',
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -717,7 +719,7 @@ app.get('/video-proxy', async (req, res) => {
     // Now proxy the actual video
     logger.debug(`Video proxy: Streaming video...`);
     
-    const videoResponse = await axios({
+    const videoResponse = await videoProxyAxios({
       method: 'get',
       url: videoUrl,
       responseType: 'stream',

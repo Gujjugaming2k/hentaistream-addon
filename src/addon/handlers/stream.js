@@ -1,10 +1,22 @@
 const cache = require('../../cache');
 const logger = require('../../utils/logger');
 const parser = require('../../utils/parser');
-const hentaimamaScraper = require('../../scrapers/hentaimama');
-const oppaiStreamScraper = require('../../scrapers/oppaistream');
-const hentaiseaScraper = require('../../scrapers/hentaisea');
-const hentaitvScraper = require('../../scrapers/hentaitv');
+// LAZY LOAD: Scrapers only loaded when needed
+let hentaimamaScraper = null;
+let oppaiStreamScraper = null;
+let hentaiseaScraper = null;
+let hentaitvScraper = null;
+
+function getScraperLazy(name) {
+  switch (name) {
+    case 'hmm': if (!hentaimamaScraper) hentaimamaScraper = require('../../scrapers/hentaimama'); return hentaimamaScraper;
+    case 'hse': if (!hentaiseaScraper) hentaiseaScraper = require('../../scrapers/hentaisea'); return hentaiseaScraper;
+    case 'htv': if (!hentaitvScraper) hentaitvScraper = require('../../scrapers/hentaitv'); return hentaitvScraper;
+    case 'os': if (!oppaiStreamScraper) oppaiStreamScraper = require('../../scrapers/oppaistream'); return oppaiStreamScraper;
+    default: if (!hentaimamaScraper) hentaimamaScraper = require('../../scrapers/hentaimama'); return hentaimamaScraper;
+  }
+}
+
 const { getOppaiStreamSlug } = require('../../utils/seriesNameMatcher');
 const config = require('../../config/env');
 
