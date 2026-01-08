@@ -1,558 +1,560 @@
 /**
  * HentaiStream Edge Addon - Cloudflare Worker
  * 
- * FULLY SCALABLE Stremio addon running on Cloudflare's edge network.
- * Handles ALL addon requests (manifest, catalog, meta, stream) without any central server.
+ * PROXY-BASED architecture - fetches pre-built data from GitHub.
+ * All the complex manifest generation, catalog building, etc. is done by Render
+ * and saved to GitHub. This worker just serves that data at the edge.
  * 
- * Architecture:
- * - Database stored in KV (reads are FREE and unlimited)
- * - Each request is isolated (no memory pressure from concurrent users)
- * - Scales to millions of requests without server RAM concerns
+ * Data Sources (all from GitHub):
+ * - /data/manifest.json - Complete Stremio manifest with catalogs
+ * - /data/catalog.json - Full series database
+ * - /data/filter-options.json - Genre/studio/year options
+ * - /data/logo.png - Addon logo/background
  * 
- * KV Namespaces Required:
- * - CATALOG_DB: Main database with series catalog
- *   Keys: 
- *     - "catalog": Full serialized catalog array
- *     - "stats": Database statistics
- *     - "filterOptions": Genre/studio filter options
- *     - "series:{id}": Individual series data (optional, for faster lookups)
- * 
- * Environment Variables:
- * - HENTAIMAMA_WORKER: URL to HentaiMama scraper worker
- * - HENTAISEA_WORKER: URL to HentaiSea scraper worker  
- * - HENTAITV_WORKER: URL to HentaiTV scraper worker
+ * Live scraping for streams still goes to provider workers.
  */
 
-const ADDON_ID = 'community.hentaistream.stremio';
-const ADDON_VERSION = '1.1.0';
-const ADDON_NAME = 'HentaiStream';
+// GitHub raw URLs for all data
+const GITHUB_BASE = 'https://raw.githubusercontent.com/Zen0-99/hentaistream-addon/master';
+const GITHUB_URLS = {
+  manifest: `${GITHUB_BASE}/data/manifest.json`,
+  catalog: `${GITHUB_BASE}/data/catalog.json`,
+  filterOptions: `${GITHUB_BASE}/data/filter-options.json`,
+  logo: `${GITHUB_BASE}/data/logo.png`,
+  configure: `${GITHUB_BASE}/public/configure.html`
+};
 
-// Cache database in worker memory for duration of request
-// (Workers are stateless but this avoids multiple KV reads per request)
-let cachedCatalog = null;
-let catalogCacheTime = 0;
-const CATALOG_CACHE_TTL = 60 * 1000; // 1 minute in-worker cache
+// In-memory cache for this worker instance
+let cache = {
+  manifest: null,
+  manifestTime: 0,
+  catalog: null,
+  catalogTime: 0,
+  filterOptions: null,
+  filterOptionsTime: 0
+};
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
-/**
- * Main entry point
- */
+// CORS headers for Stremio
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type'
+};
+
 export default {
-  async fetch(request, env, ctx) {
+  async fetch(request, env) {
     const url = new URL(request.url);
     const path = url.pathname;
-
-    // CORS headers for all responses
-    const corsHeaders = {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
-    };
-
+    
+    // Handle CORS preflight
     if (request.method === 'OPTIONS') {
-      return new Response(null, { headers: corsHeaders });
+      return new Response(null, { headers: CORS_HEADERS });
     }
-
+    
     try {
+      // Parse config from path (e.g., /bg=ntr,yaoi&bs=queen-bee/manifest.json)
+      const { config, cleanPath } = parseConfigFromPath(path);
+      
       // Route requests
-      if (path === '/' || path === '/configure') {
-        return handleConfigure(env, corsHeaders);
+      if (cleanPath === '/' || cleanPath === '') {
+        return Response.redirect(`${url.origin}/configure`, 302);
       }
       
-      if (path.endsWith('/manifest.json')) {
-        return handleManifest(url, corsHeaders);
+      if (cleanPath === '/manifest.json') {
+        return await handleManifest(config, url.origin);
       }
       
-      if (path.includes('/catalog/')) {
-        return await handleCatalog(url, env, corsHeaders);
+      if (cleanPath === '/configure') {
+        return await handleConfigure();
       }
       
-      if (path.includes('/meta/')) {
-        return await handleMeta(url, env, corsHeaders);
+      if (cleanPath === '/logo.png') {
+        return await handleLogo();
       }
       
-      if (path.includes('/stream/')) {
-        return await handleStream(url, env, corsHeaders);
+      if (cleanPath === '/api/options') {
+        return await handleApiOptions();
       }
-
-      return jsonResponse({ error: 'Not found' }, 404, corsHeaders);
-
+      
+      if (cleanPath.startsWith('/catalog/')) {
+        return await handleCatalog(cleanPath, config);
+      }
+      
+      if (cleanPath.startsWith('/meta/')) {
+        return await handleMeta(cleanPath);
+      }
+      
+      if (cleanPath.startsWith('/stream/')) {
+        return await handleStream(cleanPath, env);
+      }
+      
+      return new Response('Not Found', { status: 404, headers: CORS_HEADERS });
+      
     } catch (error) {
       console.error('Worker error:', error);
-      return jsonResponse({ error: error.message }, 500, corsHeaders);
+      return new Response(JSON.stringify({ error: error.message }), {
+        status: 500,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
+      });
     }
   }
 };
 
 /**
- * Generate manifest
+ * Parse user config from URL path
  */
-function handleManifest(url, corsHeaders) {
-  const config = parseConfigFromPath(url.pathname);
+function parseConfigFromPath(path) {
+  const configMatch = path.match(/^\/([^/]+)\/(manifest\.json|configure|catalog\/|meta\/|stream\/)/);
+  if (configMatch && configMatch[1] && !['manifest.json', 'configure', 'catalog', 'meta', 'stream', 'logo.png', 'api'].includes(configMatch[1])) {
+    const configStr = decodeURIComponent(configMatch[1]);
+    const config = {
+      blacklistGenres: [],
+      blacklistStudios: [],
+      showCounts: true
+    };
+    
+    configStr.split('&').forEach(part => {
+      const [key, value] = part.split('=');
+      if (key === 'bg' && value) config.blacklistGenres = value.split(',').map(s => s.trim().toLowerCase());
+      if (key === 'bs' && value) config.blacklistStudios = value.split(',').map(s => s.trim().toLowerCase());
+      if (key === 'showCounts') config.showCounts = value !== '0';
+    });
+    
+    const cleanPath = path.replace(`/${configMatch[1]}`, '');
+    return { config, cleanPath };
+  }
   
-  const manifest = {
-    id: ADDON_ID,
-    version: ADDON_VERSION,
-    name: ADDON_NAME,
-    description: 'Stream hentai from multiple sources',
-    types: ['series'],
-    resources: ['catalog', 'meta', 'stream'],
-    idPrefixes: ['hmm-', 'hse-', 'htv-'],
-    catalogs: [
-      {
-        type: 'hentai',
-        id: 'hentaistream-new',
-        name: '📺 New Releases',
-        extra: [{ name: 'skip', isRequired: false }],
-        behaviorHints: { notForHome: true }
-      },
-      {
-        type: 'hentai',
-        id: 'hentaistream-top',
-        name: '⭐ Top Rated',
-        extra: [{ name: 'skip', isRequired: false }],
-        behaviorHints: { notForHome: true }
-      },
-      {
-        type: 'hentai',
-        id: 'hentaistream-popular',
-        name: '🔥 Popular',
-        extra: [{ name: 'skip', isRequired: false }],
-        behaviorHints: { notForHome: true }
-      },
-      {
-        type: 'hentai',
-        id: 'hentaistream-search',
-        name: '🔍 Search',
-        extra: [
-          { name: 'search', isRequired: true },
-          { name: 'skip', isRequired: false }
-        ],
-        behaviorHints: { notForHome: true }
-      },
-      {
-        type: 'hentai',
-        id: 'hentaistream-genre',
-        name: '🏷️ By Genre',
-        extra: [
-          { name: 'genre', isRequired: true, options: [] }, // Populated dynamically
-          { name: 'skip', isRequired: false }
-        ],
-        behaviorHints: { notForHome: true }
-      },
-      {
-        type: 'hentai',
-        id: 'hentaistream-studio',
-        name: '🎬 By Studio',
-        extra: [
-          { name: 'genre', isRequired: true, options: [] }, // Using genre param for studio
-          { name: 'skip', isRequired: false }
-        ],
-        behaviorHints: { notForHome: true }
-      }
-    ],
-    behaviorHints: {
-      configurable: true,
-      configurationRequired: false,
-      adult: true
-    }
-  };
+  return { config: { blacklistGenres: [], blacklistStudios: [], showCounts: true }, cleanPath: path };
+}
 
-  return new Response(JSON.stringify(manifest), {
-    headers: {
-      ...corsHeaders,
-      'Content-Type': 'application/json',
-      'Cache-Control': 'public, max-age=86400' // Cache manifest for 24h
+/**
+ * Fetch and cache JSON from GitHub
+ */
+async function fetchGitHub(key, url) {
+  const now = Date.now();
+  if (cache[key] && (now - cache[`${key}Time`]) < CACHE_TTL) {
+    return cache[key];
+  }
+  
+  // Add cache-busting parameter to bypass Cloudflare edge cache
+  const bustUrl = `${url}?_t=${Math.floor(now / 300000)}`; // Changes every 5 minutes
+  
+  const response = await fetch(bustUrl, {
+    headers: { 
+      'User-Agent': 'HentaiStream-Edge-Worker',
+      'Cache-Control': 'no-cache'
     }
+  });
+  
+  if (!response.ok) {
+    throw new Error(`Failed to fetch ${key}: ${response.status}`);
+  }
+  
+  // Get text and strip any BOM (byte order mark) before parsing
+  let text = await response.text();
+  text = text.replace(/^\uFEFF/, ''); // Remove BOM if present
+  
+  const data = JSON.parse(text);
+  cache[key] = data;
+  cache[`${key}Time`] = now;
+  return data;
+}
+
+/**
+ * Handle manifest.json - fetch from GitHub and update URLs
+ */
+async function handleManifest(config, origin) {
+  const manifest = await fetchGitHub('manifest', GITHUB_URLS.manifest);
+  
+  // Clone and update URLs to point to this edge worker
+  const edgeManifest = JSON.parse(JSON.stringify(manifest));
+  edgeManifest.logo = `${origin}/logo.png`;
+  edgeManifest.background = `${origin}/logo.png`;
+  
+  // Remove counts from options if showCounts is false
+  if (!config.showCounts && edgeManifest.catalogs) {
+    edgeManifest.catalogs = edgeManifest.catalogs.map(cat => {
+      if (cat.extra) {
+        cat.extra = cat.extra.map(extra => {
+          if (extra.options) {
+            extra.options = extra.options.map(opt => opt.replace(/\s*\(\d+\)$/, ''));
+          }
+          return extra;
+        });
+      }
+      return cat;
+    });
+  }
+  
+  return new Response(JSON.stringify(edgeManifest), {
+    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
+  });
+}
+
+/**
+ * Handle /configure - serve the configure page
+ */
+async function handleConfigure() {
+  // Fetch configure.html from GitHub
+  const response = await fetch(GITHUB_URLS.configure, {
+    headers: { 'User-Agent': 'HentaiStream-Edge-Worker' },
+    cf: { cacheTtl: 3600, cacheEverything: true }
+  });
+  
+  if (!response.ok) {
+    return new Response('Configure page not found', { status: 404, headers: CORS_HEADERS });
+  }
+  
+  const html = await response.text();
+  
+  return new Response(html, {
+    headers: { ...CORS_HEADERS, 'Content-Type': 'text/html; charset=utf-8' }
+  });
+}
+
+/**
+ * Handle /logo.png - proxy from GitHub
+ */
+async function handleLogo() {
+  const response = await fetch(GITHUB_URLS.logo, {
+    headers: { 'User-Agent': 'HentaiStream-Edge-Worker' },
+    cf: { cacheTtl: 86400, cacheEverything: true } // Cache logo for 24h
+  });
+  
+  if (!response.ok) {
+    return new Response('Logo not found', { status: 404, headers: CORS_HEADERS });
+  }
+  
+  return new Response(response.body, {
+    headers: { ...CORS_HEADERS, 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' }
+  });
+}
+
+/**
+ * Handle /api/options - return filter options for configure page
+ */
+async function handleApiOptions() {
+  const filterOptions = await fetchGitHub('filterOptions', GITHUB_URLS.filterOptions);
+  
+  return new Response(JSON.stringify({
+    genres: filterOptions?.genres?.withCounts || [],
+    studios: filterOptions?.studios?.withCounts || []
+  }), {
+    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
   });
 }
 
 /**
  * Handle catalog requests
  */
-async function handleCatalog(url, env, corsHeaders) {
-  const pathMatch = url.pathname.match(/\/catalog\/\w+\/([^\/]+)(?:\/([^.]+))?/);
-  if (!pathMatch) {
-    return jsonResponse({ metas: [] }, 200, corsHeaders);
+async function handleCatalog(path, config) {
+  // Parse: /catalog/{type}/{id}/{extra}.json
+  const match = path.match(/\/catalog\/([^/]+)\/([^/]+)(?:\/(.+))?\.json/);
+  if (!match) {
+    return new Response(JSON.stringify({ metas: [] }), {
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
+    });
   }
-
-  const catalogId = pathMatch[1];
-  const extraPath = pathMatch[2] || '';
   
-  // Parse extras (skip, search, genre)
-  const extras = parseExtras(extraPath);
-  const skip = parseInt(extras.skip) || 0;
+  const [, type, catalogId, extraStr] = match;
+  const extra = parseExtra(extraStr);
+  
+  // Load catalog from GitHub
+  const catalogData = await fetchGitHub('catalog', GITHUB_URLS.catalog);
+  
+  // Get series array - catalog.json has structure: { catalog: [...series...] }
+  let series = Array.isArray(catalogData) ? catalogData : 
+               (catalogData.catalog || catalogData.series || []);
+  
+  // Apply blacklist filters
+  if (config.blacklistGenres.length > 0) {
+    series = series.filter(s => {
+      const genres = (s.genres || []).map(g => g.toLowerCase());
+      return !config.blacklistGenres.some(bg => genres.includes(bg));
+    });
+  }
+  
+  if (config.blacklistStudios.length > 0) {
+    series = series.filter(s => {
+      const studio = (s.studio || '').toLowerCase();
+      return !config.blacklistStudios.some(bs => studio.includes(bs));
+    });
+  }
+  
+  // Filter and sort based on catalog type
+  let filtered = filterByCatalog(series, catalogId, extra);
+  
+  // Pagination
+  const skip = parseInt(extra.skip) || 0;
   const limit = 100;
-
-  // Load catalog from KV
-  const catalog = await loadCatalogFromKV(env);
-  if (!catalog || catalog.length === 0) {
-    return jsonResponse({ metas: [] }, 200, corsHeaders);
-  }
-
-  let filtered = [...catalog];
-  
-  // Apply filters based on catalog type
-  switch (catalogId) {
-    case 'hentaistream-new':
-      // Sort by newest release date
-      filtered.sort((a, b) => {
-        const dateA = a.latestEpisodeDate || a.releaseDate || '1970-01-01';
-        const dateB = b.latestEpisodeDate || b.releaseDate || '1970-01-01';
-        return dateB.localeCompare(dateA);
-      });
-      break;
-
-    case 'hentaistream-top':
-      // Sort by rating
-      filtered.sort((a, b) => (b.rating || 0) - (a.rating || 0));
-      break;
-
-    case 'hentaistream-popular':
-      // Sort by popularity (view count or rating + episode count)
-      filtered.sort((a, b) => {
-        const popA = (a.viewCount || 0) + ((a.rating || 0) * 100) + ((a.episodeCount || 0) * 10);
-        const popB = (b.viewCount || 0) + ((b.rating || 0) * 100) + ((b.episodeCount || 0) * 10);
-        return popB - popA;
-      });
-      break;
-
-    case 'hentaistream-search':
-      if (extras.search) {
-        const query = extras.search.toLowerCase();
-        filtered = filtered.filter(s => {
-          const searchText = [s.name, s.description, ...(s.genres || [])].join(' ').toLowerCase();
-          return searchText.includes(query);
-        });
-      }
-      break;
-
-    case 'hentaistream-genre':
-      if (extras.genre) {
-        const genre = decodeURIComponent(extras.genre).toLowerCase();
-        filtered = filtered.filter(s => 
-          s.genres && s.genres.some(g => g.toLowerCase() === genre)
-        );
-      }
-      break;
-
-    case 'hentaistream-studio':
-      if (extras.genre) { // Using genre param for studio
-        const studio = decodeURIComponent(extras.genre).toLowerCase();
-        filtered = filtered.filter(s => 
-          s.studio && s.studio.toLowerCase().includes(studio)
-        );
-      }
-      break;
-  }
-
-  // Paginate
   const page = filtered.slice(skip, skip + limit);
   
   // Format for Stremio
-  const metas = page.map(formatMeta);
+  const metas = page.map(s => formatMeta(s));
+  
+  return new Response(JSON.stringify({ metas }), {
+    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
+  });
+}
 
-  return jsonResponse({ metas }, 200, corsHeaders, 300); // 5 min cache
+/**
+ * Filter series based on catalog type
+ */
+function filterByCatalog(series, catalogId, extra) {
+  let filtered = [...series];
+  const genre = extra.genre;
+  
+  switch (catalogId) {
+    case 'hentai-top-rated':
+      // Filter by genre if specified
+      if (genre) {
+        const genreLower = genre.toLowerCase().replace(/\s*\(\d+\)$/, '');
+        filtered = filtered.filter(s => 
+          (s.genres || []).some(g => g.toLowerCase() === genreLower)
+        );
+      }
+      // Sort by rating
+      filtered.sort((a, b) => (b.rating || 0) - (a.rating || 0));
+      break;
+      
+    case 'hentai-monthly':
+      // Filter by time period
+      if (genre) {
+        const now = Date.now();
+        const periods = {
+          'this week': 7 * 24 * 60 * 60 * 1000,
+          'this month': 30 * 24 * 60 * 60 * 1000,
+          '3 months': 90 * 24 * 60 * 60 * 1000,
+          'this year': 365 * 24 * 60 * 60 * 1000
+        };
+        const periodKey = genre.toLowerCase().replace(/\s*\(\d+\)$/, '');
+        const periodMs = periods[periodKey] || periods['this month'];
+        
+        filtered = filtered.filter(s => {
+          const releaseDate = s.releaseDate ? new Date(s.releaseDate).getTime() : 0;
+          return (now - releaseDate) <= periodMs;
+        });
+      }
+      // Sort by release date (newest first)
+      filtered.sort((a, b) => {
+        const dateA = a.releaseDate ? new Date(a.releaseDate).getTime() : 0;
+        const dateB = b.releaseDate ? new Date(b.releaseDate).getTime() : 0;
+        return dateB - dateA;
+      });
+      break;
+      
+    case 'hentai-studios':
+      // Filter by studio
+      if (genre) {
+        const studioLower = genre.toLowerCase().replace(/\s*\(\d+\)$/, '');
+        filtered = filtered.filter(s => 
+          (s.studio || '').toLowerCase() === studioLower
+        );
+      }
+      // Sort by rating within studio
+      filtered.sort((a, b) => (b.rating || 0) - (a.rating || 0));
+      break;
+      
+    case 'hentai-years':
+      // Filter by year
+      if (genre) {
+        const year = genre.replace(/\s*\(\d+\)$/, '');
+        filtered = filtered.filter(s => {
+          const releaseYear = s.releaseDate ? new Date(s.releaseDate).getFullYear().toString() : '';
+          return releaseYear === year;
+        });
+      }
+      // Sort by release date within year
+      filtered.sort((a, b) => {
+        const dateA = a.releaseDate ? new Date(a.releaseDate).getTime() : 0;
+        const dateB = b.releaseDate ? new Date(b.releaseDate).getTime() : 0;
+        return dateB - dateA;
+      });
+      break;
+      
+    case 'hentai-all':
+      // Filter by genre if specified
+      if (genre) {
+        const genreLower = genre.toLowerCase().replace(/\s*\(\d+\)$/, '');
+        filtered = filtered.filter(s => 
+          (s.genres || []).some(g => g.toLowerCase() === genreLower)
+        );
+      }
+      // Sort by name
+      filtered.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      break;
+      
+    case 'hentai-search':
+      // Search by query
+      if (extra.search) {
+        const query = extra.search.toLowerCase();
+        filtered = filtered.filter(s => 
+          (s.name || '').toLowerCase().includes(query) ||
+          (s.description || '').toLowerCase().includes(query)
+        );
+      }
+      break;
+      
+    default:
+      // Default: sort by rating
+      filtered.sort((a, b) => (b.rating || 0) - (a.rating || 0));
+  }
+  
+  return filtered;
 }
 
 /**
  * Handle meta requests
  */
-async function handleMeta(url, env, corsHeaders) {
-  const pathMatch = url.pathname.match(/\/meta\/\w+\/([^.]+)/);
-  if (!pathMatch) {
-    return jsonResponse({ meta: null }, 404, corsHeaders);
-  }
-
-  const id = pathMatch[1];
-  
-  // Load from KV
-  const catalog = await loadCatalogFromKV(env);
-  
-  // Find by ID
-  let series = catalog.find(s => s.id === id);
-  
-  // Try by slug if not found
-  if (!series) {
-    const slug = id.replace(/^(hmm|hse|htv)-/, '');
-    series = catalog.find(s => s.id.endsWith(slug));
-  }
-
-  if (!series) {
-    return jsonResponse({ meta: null }, 404, corsHeaders);
-  }
-
-  const meta = formatMeta(series, true); // Include videos for meta
-  
-  return jsonResponse({ meta }, 200, corsHeaders, 3600); // 1h cache
-}
-
-/**
- * Handle stream requests - proxies to scraper workers
- */
-async function handleStream(url, env, corsHeaders) {
-  const pathMatch = url.pathname.match(/\/stream\/\w+\/([^.]+)/);
-  if (!pathMatch) {
-    return jsonResponse({ streams: [] }, 200, corsHeaders);
-  }
-
-  const videoId = pathMatch[1];
-  
-  // Parse video ID format: {provider}-{series-slug}-episode-{n}
-  const [provider, ...rest] = videoId.split('-');
-  const fullSlug = rest.join('-');
-  
-  // Get scraper worker URLs from env
-  const scraperUrls = {
-    hmm: env.HENTAIMAMA_WORKER || 'https://hentaimama.kkeypop3750.workers.dev',
-    hse: env.HENTAISEA_WORKER || 'https://hentaisea.kkeypop3750.workers.dev',
-    htv: env.HENTAITV_WORKER || 'https://hentaitv.kkeypop3750.workers.dev'
-  };
-
-  // Collect streams from relevant scrapers
-  const streams = [];
-  const scraperPromises = [];
-
-  // Always try HentaiMama first (highest quality)
-  if (scraperUrls.hmm) {
-    scraperPromises.push(
-      fetchFromScraper(scraperUrls.hmm, fullSlug, 'HentaiMama')
-    );
-  }
-
-  // Add other scrapers if not HentaiMama
-  if (provider !== 'hmm' && scraperUrls[provider]) {
-    scraperPromises.push(
-      fetchFromScraper(scraperUrls[provider], fullSlug, getProviderName(provider))
-    );
-  }
-
-  // Fetch in parallel
-  const results = await Promise.allSettled(scraperPromises);
-  
-  for (const result of results) {
-    if (result.status === 'fulfilled' && result.value) {
-      streams.push(...result.value);
-    }
-  }
-
-  return jsonResponse({ streams }, 200, corsHeaders, 180); // 3 min cache
-}
-
-/**
- * Fetch streams from a scraper worker
- */
-async function fetchFromScraper(scraperUrl, episodeSlug, providerName) {
-  try {
-    const response = await fetch(`${scraperUrl}?action=stream&id=${encodeURIComponent(episodeSlug)}`, {
-      cf: { cacheTtl: 180 }
+async function handleMeta(path) {
+  // Parse: /meta/{type}/{id}.json
+  const match = path.match(/\/meta\/([^/]+)\/([^/]+)\.json/);
+  if (!match) {
+    return new Response(JSON.stringify({ meta: null }), {
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
     });
-    
-    if (!response.ok) return [];
-    
-    const data = await response.json();
-    return (data.streams || []).map(stream => ({
-      ...stream,
-      name: stream.name || `${providerName} Stream`,
-      title: stream.title || `${providerName}`
-    }));
-  } catch (error) {
-    console.error(`Scraper error for ${providerName}:`, error);
-    return [];
   }
-}
-
-/**
- * Configuration page
- */
-function handleConfigure(env, corsHeaders) {
-  const html = `<!DOCTYPE html>
-<html>
-<head>
-  <title>HentaiStream - Configure</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    body { font-family: -apple-system, sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; background: #1a1a1a; color: #fff; }
-    h1 { color: #ff6b9d; }
-    .install-btn { display: block; background: #ff6b9d; color: #fff; padding: 15px 30px; text-decoration: none; border-radius: 8px; text-align: center; font-size: 18px; margin: 20px 0; }
-    .install-btn:hover { background: #ff4785; }
-    p { color: #aaa; line-height: 1.6; }
-    code { background: #333; padding: 2px 6px; border-radius: 4px; }
-  </style>
-</head>
-<body>
-  <h1>🔞 HentaiStream</h1>
-  <p>Stream hentai from multiple sources directly in Stremio.</p>
-  <a href="stremio://${new URL(env.WORKER_URL || 'https://hentaistream-addon.workers.dev').host}/manifest.json" class="install-btn">
-    Install in Stremio
-  </a>
-  <p><strong>Features:</strong></p>
-  <ul>
-    <li>4000+ series from 3 providers</li>
-    <li>Instant catalog loading</li>
-    <li>Search by title, genre, or studio</li>
-    <li>RAW episode detection</li>
-  </ul>
-  <p><small>v${ADDON_VERSION} • Edge-powered • Infinitely scalable</small></p>
-</body>
-</html>`;
-
-  return new Response(html, {
-    headers: {
-      ...corsHeaders,
-      'Content-Type': 'text/html',
-      'Cache-Control': 'public, max-age=3600'
-    }
+  
+  const [, type, id] = match;
+  
+  // Load catalog
+  const catalogData = await fetchGitHub('catalog', GITHUB_URLS.catalog);
+  const series = Array.isArray(catalogData) ? catalogData : 
+                 (catalogData.catalog || catalogData.series || []);
+  
+  // Find the series
+  const item = series.find(s => s.id === id);
+  if (!item) {
+    return new Response(JSON.stringify({ meta: null }), {
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
+    });
+  }
+  
+  // Format full meta with episodes
+  const meta = formatFullMeta(item);
+  
+  return new Response(JSON.stringify({ meta }), {
+    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
   });
 }
 
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
 /**
- * Load catalog from KV (with in-memory cache for request duration)
+ * Handle stream requests - proxy to provider workers
  */
-async function loadCatalogFromKV(env) {
-  // Check if env.CATALOG_DB exists
-  if (!env.CATALOG_DB) {
-    console.error('CATALOG_DB KV namespace not bound');
-    return [];
+async function handleStream(path, env) {
+  // Parse: /stream/{type}/{id}.json
+  const match = path.match(/\/stream\/([^/]+)\/([^/]+)\.json/);
+  if (!match) {
+    return new Response(JSON.stringify({ streams: [] }), {
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
+    });
   }
-
-  // Use short-lived in-memory cache
-  const now = Date.now();
-  if (cachedCatalog && (now - catalogCacheTime) < CATALOG_CACHE_TTL) {
-    return cachedCatalog;
+  
+  const [, type, id] = match;
+  
+  // Determine provider from ID prefix
+  const provider = id.startsWith('hmm-') ? 'hentaimama' :
+                   id.startsWith('hse-') ? 'hentaisea' :
+                   id.startsWith('htv-') ? 'hentaitv' : null;
+  
+  if (!provider) {
+    return new Response(JSON.stringify({ streams: [] }), {
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
+    });
   }
-
+  
+  // Get worker URL from env
+  const workerUrl = env[`${provider.toUpperCase()}_WORKER`] || 
+                    env.HENTAIMAMA_WORKER; // fallback
+  
+  if (!workerUrl) {
+    return new Response(JSON.stringify({ streams: [], error: 'Provider worker not configured' }), {
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
+    });
+  }
+  
   try {
-    // Try to get pre-parsed JSON first
-    const catalogJson = await env.CATALOG_DB.get('catalog', { type: 'json' });
+    // Proxy to provider worker
+    const response = await fetch(`${workerUrl}/stream/${type}/${id}.json`, {
+      headers: { 'User-Agent': 'HentaiStream-Edge-Worker' }
+    });
     
-    if (catalogJson && Array.isArray(catalogJson)) {
-      cachedCatalog = catalogJson;
-      catalogCacheTime = now;
-      return catalogJson;
-    }
-
-    // Fallback: try compressed version
-    const compressed = await env.CATALOG_DB.get('catalog_compressed', { type: 'arrayBuffer' });
-    if (compressed) {
-      const text = new TextDecoder().decode(compressed);
-      const parsed = JSON.parse(text);
-      cachedCatalog = parsed.catalog || parsed;
-      catalogCacheTime = now;
-      return cachedCatalog;
-    }
-
-    console.warn('No catalog found in KV');
-    return [];
-
+    const data = await response.json();
+    return new Response(JSON.stringify(data), {
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
+    });
   } catch (error) {
-    console.error('KV load error:', error);
-    return [];
+    console.error(`Stream fetch error for ${provider}:`, error);
+    return new Response(JSON.stringify({ streams: [], error: error.message }), {
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
+    });
   }
 }
 
 /**
- * Format series for Stremio meta
+ * Parse extra parameters from URL
  */
-function formatMeta(series, includeVideos = false) {
+function parseExtra(extraStr) {
+  const extra = {};
+  if (!extraStr) return extra;
+  
+  extraStr.split('&').forEach(part => {
+    const [key, ...valueParts] = part.split('=');
+    const value = valueParts.join('=');
+    if (key && value !== undefined) {
+      extra[key] = decodeURIComponent(value);
+    }
+  });
+  
+  return extra;
+}
+
+/**
+ * Format series for catalog listing (minimal meta)
+ */
+function formatMeta(series) {
+  return {
+    id: series.id,
+    type: 'series', // Always series for Stremio display
+    name: series.name,
+    poster: series.poster,
+    posterShape: 'poster',
+    genres: series.genres || [],
+    description: series.description,
+    runtime: series.rating ? `★ ${series.rating.toFixed(1)}` : undefined
+  };
+}
+
+/**
+ * Format series for full meta (with episodes)
+ */
+function formatFullMeta(series) {
   const meta = {
     id: series.id,
-    type: 'series', // Must be 'series' for Stremio to display properly
-    name: series.name || series.title,
+    type: 'series',
+    name: series.name,
     poster: series.poster,
-    background: series.background || series.poster,
-    description: series.description,
+    posterShape: 'poster',
+    background: series.poster, // Use poster as background
     genres: series.genres || [],
-    runtime: series.rating ? `★ ${series.rating.toFixed(1)}` : '★ N/A',
-    releaseInfo: series.year ? String(series.year) : undefined,
-    imdbRating: series.rating || undefined,
+    description: series.description,
+    runtime: series.rating ? `★ ${series.rating.toFixed(1)}` : undefined,
+    releaseInfo: series.releaseDate ? new Date(series.releaseDate).getFullYear().toString() : undefined,
+    director: series.studio ? [series.studio] : undefined
   };
-
-  if (series.studio) {
-    meta.director = [series.studio];
-  }
-
-  // Add videos (episodes) for full meta requests
-  if (includeVideos && series.episodes && series.episodes.length > 0) {
+  
+  // Add episodes/videos
+  if (series.episodes && series.episodes.length > 0) {
     meta.videos = series.episodes.map((ep, idx) => ({
-      id: ep.id || `${series.id}-episode-${idx + 1}`,
+      id: ep.id || `${series.id}:${idx + 1}`,
       title: ep.title || `Episode ${idx + 1}`,
       season: 1,
       episode: idx + 1,
-      released: ep.date || ep.releaseDate,
+      released: ep.releaseDate || series.releaseDate,
       thumbnail: ep.thumbnail || series.poster
     }));
   }
-
+  
   return meta;
-}
-
-/**
- * Parse extras from URL path
- */
-function parseExtras(extraPath) {
-  const extras = {};
-  if (!extraPath) return extras;
-
-  // Format: key=value&key2=value2 or key=value/key2=value2
-  const parts = extraPath.split(/[&\/]/);
-  for (const part of parts) {
-    const [key, value] = part.split('=');
-    if (key && value) {
-      extras[key] = decodeURIComponent(value);
-    }
-  }
-  return extras;
-}
-
-/**
- * Parse config from URL path
- */
-function parseConfigFromPath(pathname) {
-  // Config format: /{config}/manifest.json
-  const match = pathname.match(/^\/([^\/]+)\/manifest\.json$/);
-  if (!match || match[1] === '') return {};
-  
-  const configStr = match[1];
-  const config = {};
-  
-  for (const param of configStr.split('&')) {
-    const [key, value] = param.split('=');
-    if (key && value) {
-      config[key] = value.split(',');
-    }
-  }
-  
-  return config;
-}
-
-/**
- * Get provider display name
- */
-function getProviderName(provider) {
-  const names = {
-    hmm: 'HentaiMama',
-    hse: 'HentaiSea',
-    htv: 'HentaiTV'
-  };
-  return names[provider] || provider;
-}
-
-/**
- * JSON response helper
- */
-function jsonResponse(data, status = 200, corsHeaders = {}, cacheTtl = 0) {
-  const headers = {
-    ...corsHeaders,
-    'Content-Type': 'application/json'
-  };
-  
-  if (cacheTtl > 0) {
-    headers['Cache-Control'] = `public, max-age=${cacheTtl}`;
-  }
-  
-  return new Response(JSON.stringify(data), { status, headers });
 }

@@ -33,7 +33,7 @@ const CATALOG_JSON = path.join(DATA_DIR, 'catalog.json');
 const FILTER_OPTIONS = path.join(DATA_DIR, 'filter-options.json');
 
 // Configuration - UPDATE THESE
-const KV_NAMESPACE_ID = process.env.KV_NAMESPACE_ID || 'YOUR_NAMESPACE_ID_HERE';
+const KV_NAMESPACE_ID = process.env.KV_NAMESPACE_ID || 'e5a4f58404ef4b269fe8db65f2b7cb66';
 const ACCOUNT_ID = process.env.CF_ACCOUNT_ID || 'YOUR_ACCOUNT_ID_HERE';
 
 // Parse args
@@ -138,8 +138,8 @@ async function main() {
         const tempFile = path.join(DATA_DIR, `.kv-temp-${upload.key}.json`);
         fs.writeFileSync(tempFile, upload.value);
         
-        // Use wrangler to upload
-        const cmd = `wrangler kv:key put --namespace-id="${KV_NAMESPACE_ID}" "${upload.key}" --path="${tempFile}"`;
+        // Use wrangler to upload (v4 syntax - spaces not colons)
+        const cmd = `wrangler kv key put --namespace-id="${KV_NAMESPACE_ID}" "${upload.key}" --path="${tempFile}" --remote`;
         
         if (verbose) {
           console.log(`     Running: ${cmd}`);
