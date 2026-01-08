@@ -1095,14 +1095,11 @@ app.get('/:config/meta/:type/:id.json', async (req, res) => {
 
 // Stream with query config
 app.get('/stream/:type/:id.json', async (req, res) => {
-  logger.info(`[SERVER] >>>>>> STREAM ROUTE HIT: /stream/${req.params.type}/${req.params.id}.json`);
   try {
     const userConfig = parseConfig(req.query);
     const { type, id } = req.params;
-    logger.info(`[SERVER] Stream request - type="${type}", id="${id}"`);
     
     const result = await streamHandler({ type, id, config: userConfig });
-    logger.info(`[SERVER] Stream result: ${result.streams?.length || 0} streams`);
     res.json(result);
   } catch (error) {
     logger.error('Stream error:', error);
@@ -1112,17 +1109,14 @@ app.get('/stream/:type/:id.json', async (req, res) => {
 
 // Path-based config stream
 app.get('/:config/stream/:type/:id.json', async (req, res) => {
-  logger.info(`[SERVER] >>>>>> CONFIG STREAM ROUTE HIT: /${req.params.config}/stream/${req.params.type}/${req.params.id}.json`);
   try {
     const configStr = req.params.config;
     const userConfig = parseConfig(
       Object.fromEntries(new URLSearchParams(configStr).entries())
     );
     const { type, id } = req.params;
-    logger.info(`[SERVER] Config stream request - type="${type}", id="${id}", config="${configStr}"`);
     
     const result = await streamHandler({ type, id, config: userConfig });
-    logger.info(`[SERVER] Config stream result: ${result.streams?.length || 0} streams`);
     res.json(result);
   } catch (error) {
     logger.error('Stream error:', error);

@@ -60,29 +60,15 @@ function cleanProviderSlug(slug) {
 
 async function streamHandler(args) {
   const { type, id } = args;
-  
-  // VERBOSE LOGGING FOR DEBUGGING
-  logger.info(`[STREAM] ========== STREAM REQUEST ==========`);
-  logger.info(`[STREAM] args: ${JSON.stringify(args)}`);
-  logger.info(`[STREAM] type: "${type}", id: "${id}"`);
-  
-  if (type !== 'series' && type !== 'hentai') {
-    logger.info(`[STREAM] REJECTED: type "${type}" not supported (need series or hentai)`);
-    return { streams: [] };
-  }
+  if (type !== 'series' && type !== 'hentai') return { streams: [] };
 
-  const parsed = parser.parseVideoId(id);
-  logger.info(`[STREAM] parseVideoId result: ${JSON.stringify(parsed)}`);
-  const { slug } = parsed;
-  
+  const { slug } = parser.parseVideoId(id);
   const episodeMatch = id.match(/:(\d+):(\d+)$/);
-  logger.info(`[STREAM] episodeMatch: ${JSON.stringify(episodeMatch)}`);
   const episodeNum = episodeMatch ? episodeMatch[2] : '1';
 
   const baseSlug = cleanProviderSlug(slug);
   const episodeId = `${baseSlug}-episode-${episodeNum}`;
-  logger.info(`[STREAM] slug="${slug}" -> baseSlug="${baseSlug}" -> episodeId="${episodeId}"`);
-  logger.info(`[STREAM] Workers configured: HMM=${!!WORKER_HENTAIMAMA}, HSE=${!!WORKER_HENTAISEA}, HTV=${!!WORKER_HENTAITV}`);
+  logger.debug(`[Stream] ${episodeId}`);
 
   const [hmm, hse, htv] = await Promise.allSettled([
     fetchFromWorker(WORKER_HENTAIMAMA, episodeId, 'HentaiMama'),
@@ -90,19 +76,12 @@ async function streamHandler(args) {
     fetchFromWorker(WORKER_HENTAITV, episodeId, 'HentaiTV'),
   ]);
 
-  logger.info(`[STREAM] Worker results: HMM=${hmm.status}(${hmm.value?.length || 0}), HSE=${hse.status}(${hse.value?.length || 0}), HTV=${htv.status}(${htv.value?.length || 0})`);
-
   const all = [];
   if (hmm.status === 'fulfilled' && hmm.value?.length) all.push(...hmm.value);
   if (hse.status === 'fulfilled' && hse.value?.length) all.push(...hse.value);
   if (htv.status === 'fulfilled' && htv.value?.length) all.push(...htv.value);
 
-  logger.info(`[STREAM] Total streams collected: ${all.length}`);
-  
-  if (!all.length) {
-    logger.info(`[STREAM] NO STREAMS FOUND - returning empty`);
-    return { streams: [] };
-  }
+  if (!all.length) return { streams: [] };
 
   const baseUrl = config.server.baseUrl;
 
