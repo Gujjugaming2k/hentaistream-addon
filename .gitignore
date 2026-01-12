@@ -28,7 +28,11 @@ pids/
 # Testing
 coverage/
 .nyc_output/
+<<<<<<< Updated upstream
 
+=======
+copilot-instructions.md
+>>>>>>> Stashed changes
 
 # IDE
 .vscode/
