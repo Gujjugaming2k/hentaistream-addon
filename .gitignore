@@ -28,8 +28,7 @@ pids/
 # Testing
 coverage/
 .nyc_output/
-copilot-instructions.md
-.github/
+
 
 # IDE
 .vscode/
