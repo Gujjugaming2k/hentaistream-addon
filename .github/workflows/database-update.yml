@@ -1,0 +1,106 @@
+name: Database Update
+
+on:
+  # Run daily at 6 AM UTC (covers fresh content from all timezones)
+  schedule:
+    - cron: '0 6 * * *'
+  
+  # Allow manual trigger from GitHub Actions UI
+  workflow_dispatch:
+    inputs:
+      update_type:
+        description: 'Update type'
+        required: true
+        default: 'incremental'
+        type: choice
+        options:
+          - incremental
+          - full
+      dry_run:
+        description: 'Dry run (preview without saving)'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  update-database:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Run incremental update
+        if: github.event.inputs.update_type != 'full'
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            node scripts/update-database.js --dry-run --verbose
+          else
+            node scripts/update-database.js --verbose
+          fi
+        env:
+          NODE_ENV: production
+      
+      - name: Run full database build
+        if: github.event.inputs.update_type == 'full'
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            echo "Full build dry run not supported, running test mode instead"
+            node scripts/build-database.js --test
+          else
+            node scripts/build-database.js
+          fi
+        env:
+          NODE_ENV: production
+      
+      - name: Check for changes
+        id: check_changes
+        run: |
+          git diff --quiet data/ || echo "changes=true" >> $GITHUB_OUTPUT
+      
+      - name: Commit and push changes
+        if: steps.check_changes.outputs.changes == 'true' && github.event.inputs.dry_run != 'true'
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          # Add all data files
+          git add data/catalog.json data/catalog.json.gz data/filter-options.json
+          
+          # Create commit message based on update type
+          UPDATE_TYPE="${{ github.event.inputs.update_type || 'incremental' }}"
+          TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
+          
+          if [ "$UPDATE_TYPE" = "full" ]; then
+            git commit -m "📊 Full database rebuild - $TIMESTAMP"
+          else
+            git commit -m "🔄 Incremental database update - $TIMESTAMP"
+          fi
+          
+          git push
+      
+      - name: No changes detected
+        if: steps.check_changes.outputs.changes != 'true'
+        run: echo "No new content detected. Database is up to date."
+
+  # Optional: Notify on failure
+  notify-failure:
+    needs: update-database
+    runs-on: ubuntu-latest
+    if: failure()
+    steps:
+      - name: Log failure
+        run: |
+          echo "Database update failed!"
+          echo "Check the logs for details."
