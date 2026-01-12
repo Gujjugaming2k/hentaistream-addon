@@ -872,6 +872,12 @@ async function scanProvider(scraper, providerName, existingCatalog, normalizedIn
         // HentaiMama: Use new-monthly-hentai page which shows individual episodes
         const monthlyEpisodes = await withRetry(() => hentaimamaScraper.getMonthlyReleases(page));
         
+        // DEBUG: Log how many episodes were returned
+        logger.debug(`[DEBUG] hentaimama: getMonthlyReleases returned ${monthlyEpisodes.length} episodes`);
+        if (monthlyEpisodes.length === 0) {
+          logger.info(`  ⚠️ HentaiMama returned 0 episodes - may be blocked or proxy issue`);
+        }
+        
         // Group episodes by series to detect new series vs new episodes
         const seriesMap = new Map();
         for (const ep of monthlyEpisodes) {
