@@ -1048,9 +1048,11 @@ class HentaiMamaScraper {
         const isRaw = $elem.find('.status-raw').length > 0 || 
                      $elem.text().includes('RAW');
         
-        // Extract date if present
+        // Extract date if present - look in .data div for the date span
         let releaseDate = null;
-        const dateText = $elem.find('.date, span.date').text().trim() ||
+        // The date is in: <div class="data"><h3>Episode X</h3><span>Dec. 31, 2025</span></div>
+        const dateText = $elem.find('.data span').text().trim() ||
+                        $elem.find('.date, span.date').text().trim() ||
                         $elem.parent().find('.date, span.date').text().trim();
         if (dateText) {
           // Try to parse date like "Dec. 31, 2025"
